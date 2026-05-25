@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Traker</title>
+    <script>
+      const { pathname, search, hash } = window.location
+      const repoBase = '/traker'
+
+      if (pathname.startsWith(repoBase)) {
+        const route = pathname.slice(repoBase.length)
+        const target = `${repoBase}/?p=${encodeURIComponent(route + search + hash)}`
+        window.location.replace(target)
+      } else {
+        window.location.replace('/')
+      }
+    </script>
+  </head>
+  <body></body>
+</html>

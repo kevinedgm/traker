@@ -5,9 +5,21 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#1e40af" />
     <meta name="description" content="Aplicación de seguimiento Traker" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="apple-touch-icon" href="/icons/pwa-192x192.png" />
+    <link rel="icon" type="image/svg+xml" href="%BASE_URL%favicon.svg" />
+    <link rel="apple-touch-icon" href="%BASE_URL%icons/pwa-192x192.svg" />
     <title>Traker</title>
+    <script>
+      const params = new URLSearchParams(window.location.search)
+      const redirectPath = params.get('p')
+
+      if (redirectPath) {
+        const url = new URL(window.location.href)
+        const nextPath = redirectPath.startsWith('/') ? redirectPath : `/${redirectPath}`
+
+        url.searchParams.delete('p')
+        window.history.replaceState(null, '', `${url.pathname.replace(/\/$/, '')}${nextPath}${url.search ? `?${url.searchParams.toString()}` : ''}`)
+      }
+    </script>
   </head>
   <body>
     <div id="app"></div>

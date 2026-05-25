@@ -3,7 +3,11 @@ import vue from '@vitejs/plugin-vue'
 import { VitePWA } from 'vite-plugin-pwa'
 import { fileURLToPath, URL } from 'node:url'
 
-export default defineConfig({
+export default defineConfig(({ command }) => {
+  const base = command === 'serve' ? '/' : '/traker/'
+
+  return {
+    base,
   plugins: [
     vue(),
     VitePWA({
@@ -23,8 +27,8 @@ export default defineConfig({
         description: 'Rastrea tus hábitos día a día. Offline-first, rápido y minimalista.',
         lang: 'es',
         dir: 'ltr',
-        start_url: '/',
-        scope: '/',
+        start_url: base,
+        scope: base,
         display: 'standalone',
         orientation: 'portrait',
         theme_color: '#0B0D10',
@@ -72,13 +76,13 @@ export default defineConfig({
           {
             name: 'Ver hábitos',
             short_name: 'Hábitos',
-            url: '/',
+            url: base,
             icons: [{ src: 'favicon.svg', sizes: 'any', type: 'image/svg+xml' }],
           },
           {
             name: 'Ajustes',
             short_name: 'Ajustes',
-            url: '/settings',
+            url: `${base}settings`,
             icons: [{ src: 'favicon.svg', sizes: 'any', type: 'image/svg+xml' }],
           },
         ],
@@ -133,4 +137,5 @@ export default defineConfig({
       },
     },
   },
+  }
 })
