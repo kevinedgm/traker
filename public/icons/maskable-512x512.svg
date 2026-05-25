@@ -1,0 +1,29 @@
+<!--
+  Maskable icon: content confined to the center 60% (safe zone).
+  Android/Chrome may clip to a circle or squircle — the T must
+  stay inside the inner 307×307 px circle of the 512×512 canvas.
+  Inner safe area: x=102..410, y=102..410 (20% padding each side)
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <radialGradient id="bgM" cx="30%" cy="20%" r="80%">
+      <stop offset="0%" stop-color="#1a2010"/>
+      <stop offset="100%" stop-color="#0B0D10"/>
+    </radialGradient>
+    <filter id="glowM">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- Full-bleed background (maskable icons always fill the whole canvas) -->
+  <rect width="512" height="512" fill="url(#bgM)"/>
+
+  <!-- T monogram — kept inside safe zone (x:130-382, y:150-362) -->
+  <g filter="url(#glowM)" fill="#C6FF00">
+    <!-- Horizontal bar -->
+    <rect x="130" y="152" width="252" height="46" rx="23"/>
+    <!-- Vertical stem -->
+    <rect x="233" y="198" width="46" height="164" rx="23"/>
+  </g>
+</svg>
