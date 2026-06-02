@@ -4,6 +4,7 @@ import { RouterView } from 'vue-router'
 import { useAppStore }   from '@stores/app'
 import { useAuthStore }  from '@stores/auth'
 import { useHabitsStore } from '@stores/habits'
+import { useSettingsStore } from '@stores/settings'
 import LockOverlay from '@components/lock/LockOverlay.vue'
 import AppShell    from '@components/layout/AppShell.vue'
 import { onAuthChange }  from '@services/supabase/auth.service'
@@ -13,6 +14,7 @@ import { startScheduler, stopScheduler, getPermission } from '@services/notifica
 const appStore    = useAppStore()
 const authStore   = useAuthStore()
 const habitsStore = useHabitsStore()
+const settingsStore = useSettingsStore()
 
 // Apply theme before first paint (no FOUC)
 appStore.initTheme()
@@ -40,7 +42,7 @@ onMounted(() => {
   // If the user grants permission later (via Settings), the composable
   // in SettingsPage calls startScheduler() at that point.
   if (getPermission() === 'granted') {
-    startScheduler(() => habitsStore.habits)
+    startScheduler(() => habitsStore.habits, () => settingsStore.$state)
   }
 })
 

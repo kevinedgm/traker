@@ -28,6 +28,18 @@ export const useSettingsStore = defineStore(
     /** Default reminder time used when creating a new habit. */
     const defaultReminderTime  = ref('08:00')
 
+    /** Daily fallback reminder when nothing has been logged yet. */
+    const inactivityReminderEnabled = ref(true)
+
+    /** Time for the fallback "nothing logged yet" reminder. */
+    const inactivityReminderTime    = ref('20:00')
+
+    /** Morning motivational reminder. */
+    const morningReminderEnabled    = ref(true)
+
+    /** Time for the morning motivational reminder. */
+    const morningReminderTime       = ref('08:00')
+
     // ── Display ────────────────────────────────────────────────
     /** Legacy key for the optional continuity indicator. */
     const showStreak           = ref(true)
@@ -84,6 +96,10 @@ export const useSettingsStore = defineStore(
       displayName.value           = ''
       notificationsEnabled.value  = false
       defaultReminderTime.value   = '08:00'
+      inactivityReminderEnabled.value = true
+      inactivityReminderTime.value    = '20:00'
+      morningReminderEnabled.value    = true
+      morningReminderTime.value       = '08:00'
       showStreak.value            = true
       showProgress.value          = true
       compactGrid.value           = false
@@ -100,6 +116,10 @@ export const useSettingsStore = defineStore(
       // Notification
       notificationsEnabled,
       defaultReminderTime,
+      inactivityReminderEnabled,
+      inactivityReminderTime,
+      morningReminderEnabled,
+      morningReminderTime,
       // Display
       showStreak,
       showProgress,
@@ -129,6 +149,10 @@ export const useSettingsStore = defineStore(
           displayName:             state.displayName,
           notificationsEnabled:    state.notificationsEnabled,
           defaultReminderTime:     state.defaultReminderTime,
+          inactivityReminderEnabled: state.inactivityReminderEnabled,
+          inactivityReminderTime:    state.inactivityReminderTime,
+          morningReminderEnabled:    state.morningReminderEnabled,
+          morningReminderTime:       state.morningReminderTime,
           showStreak:              state.showStreak,
           showProgress:            state.showProgress,
           compactGrid:             state.compactGrid,
@@ -146,6 +170,10 @@ export const useSettingsStore = defineStore(
           displayName:             String (saved.displayName             ?? ''),
           notificationsEnabled:    Boolean(saved.notificationsEnabled    ?? false),
           defaultReminderTime:     String (saved.defaultReminderTime     ?? '08:00'),
+          inactivityReminderEnabled: Boolean(saved.inactivityReminderEnabled ?? true),
+          inactivityReminderTime:    String (saved.inactivityReminderTime    ?? '20:00'),
+          morningReminderEnabled:    Boolean(saved.morningReminderEnabled    ?? true),
+          morningReminderTime:       String (saved.morningReminderTime       ?? '08:00'),
           showStreak:              Boolean(saved.showStreak              ?? true),
           showProgress:            Boolean(saved.showProgress            ?? true),
           compactGrid:             Boolean(saved.compactGrid             ?? false),

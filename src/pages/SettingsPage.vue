@@ -40,7 +40,8 @@ async function askNotifPermission() {
   const result = await requestPermission()
   notifPermission.value = result
   if (result === 'granted') {
-    startScheduler(() => habitsStore.habits)
+    settingsStore.notificationsEnabled = true
+    startScheduler(() => habitsStore.habits, () => settingsStore.$state)
     showNotification('Traker', { body: '🔔 Notificaciones activadas correctamente' })
   }
 }
@@ -332,6 +333,78 @@ function resetAllData() {
             Ver hábitos
           </button>
         </div>
+
+        <template v-if="notifPermission === 'granted'">
+          <div class="sp-divider" />
+
+          <div class="sp-row sp-row--toggle">
+            <div class="sp-row__text">
+              <span class="sp-row__label">Motivación por la mañana</span>
+              <span class="sp-row__sub">Un mensaje suave para arrancar el día</span>
+            </div>
+            <button
+              class="sp-toggle"
+              :class="{ 'sp-toggle--on': settingsStore.morningReminderEnabled }"
+              type="button"
+              role="switch"
+              :aria-pressed="settingsStore.morningReminderEnabled"
+              :aria-checked="settingsStore.morningReminderEnabled"
+              aria-label="Activar recordatorio matutino de motivacion"
+              @click="settingsStore.morningReminderEnabled = !settingsStore.morningReminderEnabled"
+            >
+              <span class="sp-toggle__thumb" />
+            </button>
+          </div>
+
+          <div v-if="settingsStore.morningReminderEnabled" class="sp-divider" />
+          <div v-if="settingsStore.morningReminderEnabled" class="sp-row">
+            <div class="sp-row__text">
+              <span class="sp-row__label">Hora del mensaje matutino</span>
+              <span class="sp-row__sub">Se manda una vez al día aunque todavía no toque un hábito</span>
+            </div>
+            <input
+              v-model="settingsStore.morningReminderTime"
+              class="sp-input sp-input--inline sp-input--time"
+              type="time"
+              aria-label="Hora del mensaje matutino"
+            />
+          </div>
+
+          <div class="sp-divider" />
+
+          <div class="sp-row sp-row--toggle">
+            <div class="sp-row__text">
+              <span class="sp-row__label">Recordatorio si no registraste nada</span>
+              <span class="sp-row__sub">Te avisa una vez al día si todavía no hay ningún registro</span>
+            </div>
+            <button
+              class="sp-toggle"
+              :class="{ 'sp-toggle--on': settingsStore.inactivityReminderEnabled }"
+              type="button"
+              role="switch"
+              :aria-pressed="settingsStore.inactivityReminderEnabled"
+              :aria-checked="settingsStore.inactivityReminderEnabled"
+              aria-label="Activar recordatorio por falta de registro"
+              @click="settingsStore.inactivityReminderEnabled = !settingsStore.inactivityReminderEnabled"
+            >
+              <span class="sp-toggle__thumb" />
+            </button>
+          </div>
+
+          <div v-if="settingsStore.inactivityReminderEnabled" class="sp-divider" />
+          <div v-if="settingsStore.inactivityReminderEnabled" class="sp-row">
+            <div class="sp-row__text">
+              <span class="sp-row__label">Hora del recordatorio general</span>
+              <span class="sp-row__sub">Solo aparece si ese día aún no has registrado nada</span>
+            </div>
+            <input
+              v-model="settingsStore.inactivityReminderTime"
+              class="sp-input sp-input--inline sp-input--time"
+              type="time"
+              aria-label="Hora del recordatorio general"
+            />
+          </div>
+        </template>
       </div>
     </section>
 

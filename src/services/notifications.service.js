@@ -108,6 +108,9 @@ let _interval    = null
 /** @type {(() => object[]) | null} */
 let _getHabits   = null
 
+/** @type {(() => object | null) | null} */
+let _getSettings = null
+
 /** Set of "habitId-date-HH:MM" keys — prevents double-fire in same minute */
 const _firedKeys = new Set()
 
@@ -116,9 +119,11 @@ const _firedKeys = new Set()
  * Safe to call multiple times — only one interval runs at a time.
  *
  * @param {() => object[]} getHabitsFn  Reactive getter returning the habits array
+ * @param {() => object | null} [getSettingsFn]  Reactive getter returning settings
  */
-export function startScheduler(getHabitsFn) {
+export function startScheduler(getHabitsFn, getSettingsFn = null) {
   _getHabits = getHabitsFn
+  _getSettings = getSettingsFn
   if (_interval !== null) return          // already running
 
   _tick()                                 // fire immediately on start
@@ -148,6 +153,29 @@ function _todayStr() {
   return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
 }
 
+function _getCurrentDay(habit) {
+  if (!habit?.createdAt) return 1
+  const created = new Date(habit.createdAt)
+  const today = new Date()
+  created.setHours(0, 0, 0, 0)
+  today.setHours(0, 0, 0, 0)
+  const diff = Math.floor((today - created) / 86_400_000)
+  const duration = Math.max(1, Number(habit?.duration) || 1)
+  return Math.min(Math.max(diff + 1, 1), duration)
+}
+
+function _hasLoggedToday(habit) {
+  const day = _getCurrentDay(habit)
+  return habit?.logs?.[day] !== undefined
+}
+
+const MORNING_MESSAGES = [
+  'Buen dia. Hoy tambien cuenta un paso pequeno.',
+  'Empieza suave: un registro basta para tomar impulso.',
+  'No tienes que hacerlo perfecto, solo empezar hoy.',
+  'Hazlo facil para tu yo de esta manana: un paso y seguimos.',
+]
+
 function _tick() {
   if (Notification.permission !== 'granted') return
   if (!_getHabits) return
@@ -158,8 +186,27 @@ function _tick() {
   const hhmm    = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
   const weekday = now.getDay()            // 0 = Sunday … 6 = Saturday
   const dateStr = _todayStr()
+  const habits  = _getHabits()
+  const settings = _getSettings?.() ?? null
+  const activeHabits = habits.filter(habit => habit?.isActive)
 
-  for (const habit of _getHabits()) {
+  if (settings?.morningReminderEnabled && settings?.morningReminderTime === hhmm && activeHabits.length) {
+    const morningKey = `morning-${dateStr}-${hhmm}`
+    if (!_firedKeys.has(morningKey)) {
+      _firedKeys.add(morningKey)
+      const message = MORNING_MESSAGES[now.getDate() % MORNING_MESSAGES.length]
+      showNotification('Traker', {
+        body: message,
+        tag: 'daily-morning-motivation',
+        renotify: true,
+        data: { url: '/' },
+      })
+    }
+  }
+
+  for (const habit of habits) {
+    if (!habit?.isActive) continue
+
     // Skip habits without a reminder time set
     if (!habit.reminder) continue
 
@@ -169,6 +216,9 @@ function _tick() {
     // Skip if today's weekday is not in the allowed days list
     const days = habit.reminderDays
     if (Array.isArray(days) && days.length > 0 && !days.includes(weekday)) continue
+
+    // Skip if today's entry is already registered
+    if (_hasLoggedToday(habit)) continue
 
     // Deduplicate: only fire once per (habit, minute)
     const fireKey = `${habit.id}-${dateStr}-${hhmm}`
@@ -183,4 +233,21 @@ function _tick() {
       data:    { url: `/habit/${habit.id}` },
     })
   }
+
+  if (!settings?.inactivityReminderEnabled) return
+  if (settings?.inactivityReminderTime !== hhmm) return
+
+  if (!activeHabits.length) return
+  if (activeHabits.some(_hasLoggedToday)) return
+
+  const inactivityKey = `inactivity-${dateStr}-${hhmm}`
+  if (_firedKeys.has(inactivityKey)) return
+  _firedKeys.add(inactivityKey)
+
+  showNotification('Traker', {
+    body: 'Aun no has registrado nada hoy. Un paso pequeno tambien cuenta.',
+    tag: 'daily-inactivity-reminder',
+    renotify: true,
+    data: { url: '/' },
+  })
 }

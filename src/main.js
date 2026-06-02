@@ -1,5 +1,6 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
+import { registerSW } from 'virtual:pwa-register'
 
 import { storage } from '@services/storage'
 import { createPersistence } from '@plugins/persistence'
@@ -35,13 +36,18 @@ import './assets/main.css'
 storage.bootstrap()
 
 // ─────────────────────────────────────────────────────────────
-// 3. Create Pinia with the persistence plugin
+// 3.5 Register the service worker so notifications can use it
+// ─────────────────────────────────────────────────────────────
+registerSW({ immediate: true })
+
+// ─────────────────────────────────────────────────────────────
+// 4. Create Pinia with the persistence plugin
 // ─────────────────────────────────────────────────────────────
 const pinia = createPinia()
 pinia.use(createPersistence())
 
 // ─────────────────────────────────────────────────────────────
-// 4. Mount the Vue app
+// 5. Mount the Vue app
 // ─────────────────────────────────────────────────────────────
 const app = createApp(App)
 app.use(pinia)
