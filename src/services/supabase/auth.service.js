@@ -18,6 +18,16 @@
 
 import { supabase } from './client.js'
 
+/**
+ * Absolute URL email links should return to.
+ * Includes the Vite base path so it resolves to the app on GitHub Pages
+ * (https://user.github.io/traker/) — origin alone drops the /traker/ subpath.
+ * Must also be present in Supabase → Auth → URL Configuration → Redirect URLs.
+ */
+function appRedirectUrl() {
+  return `${window.location.origin}${import.meta.env.BASE_URL}`
+}
+
 // ── Sign up ────────────────────────────────────────────────────────────────
 
 /**
@@ -31,7 +41,7 @@ export async function signUp(email, password) {
     email: email.trim().toLowerCase(),
     password,
     options: {
-      emailRedirectTo: `${window.location.origin}/`,
+      emailRedirectTo: appRedirectUrl(),
     },
   })
 
@@ -66,7 +76,7 @@ export async function signInWithMagicLink(email) {
   const { data, error } = await supabase.auth.signInWithOtp({
     email: email.trim().toLowerCase(),
     options: {
-      emailRedirectTo: `${window.location.origin}/`,
+      emailRedirectTo: appRedirectUrl(),
     },
   })
 
