@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, onUnmounted } from 'vue'
+import { onMounted, onUnmounted, watch } from 'vue'
 import { RouterView } from 'vue-router'
 import { useAppStore }   from '@stores/app'
 import { useAuthStore }  from '@stores/auth'
@@ -8,8 +8,9 @@ import { useSettingsStore } from '@stores/settings'
 import LockOverlay from '@components/lock/LockOverlay.vue'
 import AppShell    from '@components/layout/AppShell.vue'
 import { onAuthChange }  from '@services/supabase/auth.service'
-import { flushQueue, pullAll, pushAll } from '@services/supabase/sync.service'
+import { flushQueue, pullAll, pushAll, pushSettings } from '@services/supabase/sync.service'
 import { startScheduler, stopScheduler, getPermission } from '@services/notifications.service'
+import { ensurePushSubscription } from '@services/push.service'
 
 const appStore    = useAppStore()
 const authStore   = useAuthStore()
@@ -33,6 +34,9 @@ onMounted(() => {
         const cloud = await pullAll()
         if (cloud?.habits) habitsStore.mergeFromCloud(cloud.habits)
         await pushAll(habitsStore.habits)
+        // Cloud reminders: register this device + sync reminder prefs
+        await pushSettings(settingsStore.$state)
+        await ensurePushSubscription()
       })().catch(console.warn)
     }
   })
@@ -44,7 +48,31 @@ onMounted(() => {
   if (getPermission() === 'granted') {
     startScheduler(() => habitsStore.habits, () => settingsStore.$state)
   }
+
+  // ── Web Push ─────────────────────────────────────────────────────────────
+  // Self-heals on every app start: re-upserts the current endpoint
+  // (covers browser-rotated subscriptions) and no-ops when permission
+  // or session are missing.
+  ensurePushSubscription().catch(console.warn)
 })
+
+// Keep the cron's copy of the reminder prefs fresh (debounced)
+let _settingsSyncTimer = null
+watch(
+  () => [
+    settingsStore.notificationsEnabled,
+    settingsStore.morningReminderEnabled,
+    settingsStore.morningReminderTime,
+    settingsStore.inactivityReminderEnabled,
+    settingsStore.inactivityReminderTime,
+  ],
+  () => {
+    clearTimeout(_settingsSyncTimer)
+    _settingsSyncTimer = setTimeout(() => {
+      pushSettings(settingsStore.$state).catch(console.warn)
+    }, 1500)
+  }
+)
 
 onUnmounted(() => {
   unsubAuth?.()

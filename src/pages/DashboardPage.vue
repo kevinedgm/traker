@@ -3,13 +3,28 @@ import { ref, computed } from 'vue'
 import { useHabitsStore }   from '@stores/habits'
 import { useAuthStore }     from '@stores/auth'
 import { useSettingsStore } from '@stores/settings'
-import { Sparkles } from 'lucide-vue-next'
+import { BellOff, Moon, Sparkles } from 'lucide-vue-next'
 import HabitRow          from '@components/habits/HabitRow.vue'
 import CreateHabitModal  from '@components/habits/CreateHabitModal.vue'
+import DayCloseModal     from '@components/habits/DayCloseModal.vue'
+import { getPermission } from '@services/notifications.service'
 
 const store    = useHabitsStore()
 const auth     = useAuthStore()
 const settings = useSettingsStore()
+
+// ── Reminder health ────────────────────────────────────
+// The user expects reminders (configured some) but the browser
+// can't show them → point to the diagnostics screen.
+const notifPermission = ref(getPermission())
+
+const remindersBroken = computed(() => {
+  if (notifPermission.value === 'granted' || notifPermission.value === 'unsupported') return false
+  const expectsReminders =
+    settings.notificationsEnabled ||
+    store.habits.some(h => h.isActive && h.reminder)
+  return expectsReminders
+})
 
 const showCreate = ref(false)
 const habits     = computed(() => store.habits.filter(h => h.isActive !== false))
@@ -75,6 +90,20 @@ const totalHabits = computed(() => habits.value.length)
 
 // Mini bars for stat card (one per habit, max 8)
 const miniBarHabits = computed(() => habits.value.slice(0, 8))
+
+// ── Day close ("¿Cómo cerramos hoy?") ──────────────────
+const showDayClose = ref(false)
+
+const pendingToday = computed(() =>
+  habits.value.filter(h => {
+    const day = store.getCurrentDay(h)
+    return day >= 1 && day <= h.duration && h.logs?.[day] === undefined
+  }).length
+)
+
+// Evening invitation: pending habits + it's already late enough
+const isEvening = new Date().getHours() >= 17
+const showCloseInvite = computed(() => isEvening && pendingToday.value > 0)
 </script>
 
 <template>
@@ -103,6 +132,20 @@ const miniBarHabits = computed(() => habits.value.slice(0, 8))
         <span>NUEVO</span>
       </button>
     </header>
+
+    <!-- ─── Reminder health warning ─────────────────── -->
+    <RouterLink
+      v-if="remindersBroken"
+      class="dash__notif-warn"
+      to="/settings/notifications"
+      role="status"
+    >
+      <BellOff :size="18" :stroke-width="2" aria-hidden="true" />
+      <span class="dash__notif-warn-text">
+        <strong>Los recordatorios no están activos.</strong>
+        Toca para ver el diagnóstico.
+      </span>
+    </RouterLink>
 
     <!-- ─── Stats cards ─────────────────────────────── -->
     <div v-if="hasHabits" class="dash__stats">
@@ -147,6 +190,22 @@ const miniBarHabits = computed(() => habits.value.slice(0, 8))
       <span>Un registro pequeño también cuenta.</span>
     </div>
 
+    <!-- ─── Day close invitation (evening) ──────────── -->
+    <button
+      v-if="showCloseInvite"
+      class="dash__close-day"
+      type="button"
+      @click="showDayClose = true"
+    >
+      <span class="dash__close-day-icon" aria-hidden="true">
+        <Moon :size="18" :stroke-width="1.8" />
+      </span>
+      <span class="dash__close-day-text">
+        <strong>¿Cerramos el día?</strong>
+        {{ pendingToday }} {{ pendingToday === 1 ? 'hábito pendiente' : 'hábitos pendientes' }} — un toque cada uno
+      </span>
+    </button>
+
     <!-- ─── Habit list ───────────────────────────────── -->
     <section v-if="hasHabits" class="dash__list" aria-label="Tus hábitos">
       <h2 class="dash__section-label">CONTINÚA HOY</h2>
@@ -179,8 +238,9 @@ const miniBarHabits = computed(() => habits.value.slice(0, 8))
       </button>
     </div>
 
-    <!-- ─── Modal ────────────────────────────────────── -->
+    <!-- ─── Modals ───────────────────────────────────── -->
     <CreateHabitModal v-if="showCreate" @close="showCreate = false" />
+    <DayCloseModal v-if="showDayClose" @close="showDayClose = false" />
 
   </div>
 </template>
@@ -380,6 +440,35 @@ const miniBarHabits = computed(() => habits.value.slice(0, 8))
   transition: height 700ms var(--ease-standard);
 }
 
+/* ── Reminder health warning ─────────────────── */
+.dash__notif-warn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-card-md);
+  border: 1px solid color-mix(in srgb, var(--color-danger) 26%, var(--color-border));
+  background: color-mix(in srgb, var(--color-danger) 7%, var(--color-surface));
+  color: var(--color-danger);
+  text-decoration: none;
+  transition: border-color var(--duration-base) var(--ease-standard);
+}
+
+.dash__notif-warn:active { transform: scale(0.99); }
+
+.dash__notif-warn-text {
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.dash__notif-warn-text strong {
+  color: var(--color-text);
+  font-weight: 700;
+  display: block;
+}
+
 .dash__restart {
   padding: var(--space-4);
   border-radius: var(--radius-card-md);
@@ -403,6 +492,54 @@ const miniBarHabits = computed(() => habits.value.slice(0, 8))
   color: var(--color-text-muted);
   font-size: 0.78rem;
   font-weight: 500;
+}
+
+/* ── Day close invitation ─────────────────────── */
+.dash__close-day {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  text-align: left;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-card-md);
+  border: 1px solid color-mix(in srgb, var(--color-brand) 22%, var(--color-border));
+  background:
+    linear-gradient(135deg,
+      color-mix(in srgb, var(--color-brand) 9%, var(--color-surface)),
+      var(--color-surface));
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.dash__close-day:active { transform: scale(0.99); }
+
+.dash__close-day-icon {
+  flex-shrink: 0;
+  width: 2.25rem;
+  height: 2.25rem;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--color-brand) 14%, var(--color-surface-raised));
+  color: var(--color-brand);
+}
+
+.dash__close-day-text {
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.dash__close-day-text strong {
+  display: block;
+  color: var(--color-text);
+  font-size: var(--text-sm);
+  font-weight: 750;
+  letter-spacing: -0.01em;
 }
 
 /* ══════════════════════════════════════════════

@@ -41,6 +41,9 @@ build/Release
 node_modules/
 jspm_packages/
 
+# Agent skills installed via `npx skills add` (regenerable tooling)
+.agents/
+
 # Snowpack dependency directory (https://snowpack.dev/)
 web_modules/
 

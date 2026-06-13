@@ -192,7 +192,10 @@ export const useHabitsStore = defineStore(
           local.duration     = incoming.duration
           local.isActive     = incoming.isActive
           local.reminder     = incoming.reminder
-          local.reminderDays = incoming.reminderDays
+          // Cloud can't store reminderDays yet (no column until migration
+          // 003) — a null from the cloud means "unknown", not "cleared",
+          // so never wipe the locally configured days with it.
+          local.reminderDays = incoming.reminderDays ?? local.reminderDays
           local.updatedAt    = incoming.updatedAt
         }
 

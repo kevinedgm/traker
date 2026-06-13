@@ -19,7 +19,7 @@ export default defineConfig(({ command }) => {
       filename:   'sw.js',
 
       // Only include assets that actually exist
-      includeAssets: ['favicon.svg', 'icons/*.svg'],
+      includeAssets: ['favicon.svg', 'icons/*.svg', 'icons/*.png'],
 
       manifest: {
         name: 'Traker — Seguimiento de hábitos',
@@ -35,6 +35,26 @@ export default defineConfig(({ command }) => {
         background_color: '#0B0D10',
 
         icons: [
+          // PNG first — Android WebAPK install + notification icons
+          {
+            src: 'icons/pwa-192x192.png',
+            sizes: '192x192',
+            type: 'image/png',
+            purpose: 'any',
+          },
+          {
+            src: 'icons/pwa-512x512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'any',
+          },
+          // Maskable — Android adaptive icon (rounded/squircle crops)
+          {
+            src: 'icons/maskable-512x512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'maskable',
+          },
           // SVG — modern browsers (Chrome 80+, Firefox, Safari 16+)
           {
             src: 'favicon.svg',
@@ -42,35 +62,13 @@ export default defineConfig(({ command }) => {
             type: 'image/svg+xml',
             purpose: 'any',
           },
-          // 192 × 192 — required for Android "Add to Home Screen"
-          {
-            src: 'icons/pwa-192x192.svg',
-            sizes: '192x192',
-            type: 'image/svg+xml',
-            purpose: 'any',
-          },
-          // 512 × 512 — splash screen / Play Store
           {
             src: 'icons/pwa-512x512.svg',
             sizes: '512x512',
             type: 'image/svg+xml',
             purpose: 'any',
           },
-          // Maskable — Android adaptive icon (rounded/squircle crops)
-          {
-            src: 'icons/maskable-512x512.svg',
-            sizes: '512x512',
-            type: 'image/svg+xml',
-            purpose: 'maskable',
-          },
         ],
-
-        // NOTE: For production / Play Store, generate PNG versions:
-        //   npx sharp-cli --input public/icons/pwa-512x512.svg
-        //     --output public/icons/pwa-512x512.png resize 512
-        //   npx sharp-cli --input public/icons/pwa-192x192.svg
-        //     --output public/icons/pwa-192x192.png resize 192
-        // Then add them here alongside the SVGs.
 
         shortcuts: [
           {

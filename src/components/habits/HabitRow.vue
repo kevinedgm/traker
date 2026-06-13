@@ -9,12 +9,56 @@ const props  = defineProps({ habit: { type: Object, required: true } })
 const router = useRouter()
 const store  = useHabitsStore()
 let pressTimer = null
+let pickerTimer = null
+let confirmTimer = null
 
 const currentDay = computed(() => store.getCurrentDay(props.habit))
 const percent    = computed(() => Math.min(store.getProgress(props.habit), 100))
 const justLogged = ref(false)
 const longPressConsumed = ref(false)
 const todayLogged = computed(() => (props.habit.logs?.[currentDay.value]?.level ?? 0) > 0)
+
+/* ── One-tap level picker ─────────────────────────── */
+const showPicker = ref(false)
+const confirmMsg = ref('')
+
+// Order matches effort: full → partial → minimal → not today
+const PICK_LEVELS = [
+  { value: 3, label: 'Completo', confirm: '¡Día completo!' },
+  { value: 2, label: 'Bien',     confirm: 'Buen avance ✓' },
+  { value: 1, label: 'Mínimo',   confirm: 'Mínimo hecho — también suma' },
+  { value: 0, label: 'Hoy no',   confirm: 'Anotado. Mañana seguimos.' },
+]
+
+function togglePicker() {
+  showPicker.value = !showPicker.value
+  window.clearTimeout(pickerTimer)
+  if (showPicker.value) {
+    // Auto-close if the user gets distracted mid-decision
+    pickerTimer = window.setTimeout(() => { showPicker.value = false }, 6000)
+  }
+}
+
+function pickLevel(value) {
+  const existing = props.habit.logs?.[currentDay.value] ?? {}
+  store.logDay(props.habit.id, currentDay.value, {
+    level: value,
+    emotion: existing.emotion ?? null,
+    energy: existing.energy ?? null,
+    note: existing.note ?? '',
+  })
+
+  window.clearTimeout(pickerTimer)
+  showPicker.value = false
+
+  confirmMsg.value = PICK_LEVELS.find(l => l.value === value)?.confirm ?? '✓'
+  justLogged.value = true
+  window.clearTimeout(confirmTimer)
+  confirmTimer = window.setTimeout(() => {
+    confirmMsg.value = ''
+    justLogged.value = false
+  }, 1600)
+}
 
 // Reminder label: show time if set, else "Todo el día"
 const timeLabel = computed(() => props.habit.reminder ?? 'Todo el día')
@@ -34,20 +78,13 @@ function navigate() {
     longPressConsumed.value = false
     return
   }
+  if (showPicker.value) {
+    // A stray tap while choosing closes the picker, never navigates
+    window.clearTimeout(pickerTimer)
+    showPicker.value = false
+    return
+  }
   router.push({ name: 'habit', params: { id: props.habit.id } })
-}
-
-function quickLog() {
-  const existing = props.habit.logs?.[currentDay.value] ?? {}
-  store.logDay(props.habit.id, currentDay.value, {
-    level: 3,
-    emotion: existing.emotion ?? null,
-    energy: existing.energy ?? null,
-    note: existing.note ?? '',
-  })
-
-  justLogged.value = true
-  window.setTimeout(() => { justLogged.value = false }, 720)
 }
 
 function startLongPress() {
@@ -55,7 +92,7 @@ function startLongPress() {
   longPressConsumed.value = false
   pressTimer = window.setTimeout(() => {
     longPressConsumed.value = true
-    quickLog()
+    pickLevel(3)   // power shortcut: long-press = full day
   }, 520)
 }
 
@@ -135,9 +172,10 @@ function clearLongPress() {
       class="hr__quick"
       :class="{ 'hr__quick--done': todayLogged }"
       type="button"
-      :aria-label="todayLogged ? `${habit.name} registrado hoy` : `Registrar ${habit.name} ahora`"
-      :title="todayLogged ? 'Registrado hoy' : 'Registrar ahora'"
-      @click.stop="quickLog"
+      :aria-label="todayLogged ? `${habit.name} registrado hoy — toca para ajustar` : `Registrar ${habit.name} ahora`"
+      :title="todayLogged ? 'Registrado hoy — toca para ajustar' : 'Registrar ahora'"
+      :aria-expanded="showPicker"
+      @click.stop="togglePicker"
       @pointerdown.stop
     >
       <Check :size="15" :stroke-width="2.6" aria-hidden="true" />
@@ -146,12 +184,44 @@ function clearLongPress() {
 
     <!-- ── Chevron ── -->
     <ChevronRight class="hr__chevron" :size="16" :stroke-width="2" aria-hidden="true" />
+
+    <!-- ── One-tap level picker (overlay) ── -->
+    <Transition name="hr-pick">
+      <div
+        v-if="showPicker"
+        class="hr__picker"
+        role="group"
+        :aria-label="`¿Cómo fue ${habit.name} hoy?`"
+        @click.stop
+        @pointerdown.stop
+      >
+        <button
+          v-for="lvl in PICK_LEVELS"
+          :key="lvl.value"
+          class="hr__pick"
+          :class="`hr__pick--lv${lvl.value}`"
+          type="button"
+          :aria-label="`${lvl.label} — registrar y cerrar`"
+          @click="pickLevel(lvl.value)"
+        >
+          {{ lvl.label }}
+        </button>
+      </div>
+    </Transition>
+
+    <!-- ── Confirmation flash ── -->
+    <Transition name="hr-pick">
+      <div v-if="confirmMsg" class="hr__confirm" role="status">
+        {{ confirmMsg }}
+      </div>
+    </Transition>
   </div>
 </template>
 
 <style scoped>
 /* ── Card ──────────────────────────────────────────── */
 .hr {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 0.75rem;
@@ -387,6 +457,93 @@ function clearLongPress() {
   flex-shrink: 0;
   color: var(--color-text-faint);
   align-self: center;
+}
+
+/* ── One-tap level picker ─────────────────────────── */
+.hr__picker {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--color-surface) 88%, transparent);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+.hr__pick {
+  flex: 1;
+  min-height: 2.75rem;            /* comfortable touch target */
+  border-radius: var(--radius-full);
+  border: 1.5px solid var(--color-border);
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  font-size: 0.6875rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  white-space: nowrap;
+  padding: 0 var(--space-1);
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.hr__pick:active { transform: scale(0.95); }
+
+.hr__pick--lv3 {
+  border-color: var(--hc);
+  background: var(--hc);
+  color: var(--color-brand-contrast);
+}
+
+.hr__pick--lv2 {
+  border-color: color-mix(in srgb, var(--hc) 55%, var(--color-border));
+  background: color-mix(in srgb, var(--hc) 18%, var(--color-surface-raised));
+  color: var(--color-text);
+}
+
+.hr__pick--lv1 {
+  border-color: color-mix(in srgb, var(--hc) 35%, var(--color-border));
+  background: color-mix(in srgb, var(--hc) 8%, var(--color-surface-raised));
+  color: var(--color-text);
+}
+
+.hr__pick--lv0 {
+  color: var(--color-text-muted);
+}
+
+/* ── Confirmation flash ───────────────────────────── */
+.hr__confirm {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--color-surface) 88%, transparent);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  color: var(--color-text);
+  font-size: 0.8125rem;
+  font-weight: 750;
+  letter-spacing: -0.01em;
+  pointer-events: none;
+}
+
+.hr-pick-enter-active,
+.hr-pick-leave-active {
+  transition: opacity var(--duration-base) var(--ease-standard),
+              transform var(--duration-base) var(--ease-standard);
+}
+
+.hr-pick-enter-from,
+.hr-pick-leave-to {
+  opacity: 0;
+  transform: scale(0.98);
 }
 
 @keyframes quick-done {

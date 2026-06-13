@@ -29,6 +29,24 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(self.clients.claim())
 })
 
+// ── Scope-aware URL helpers ────────────────────────────────────────────────
+//
+// On GitHub Pages the app lives under /traker/, so absolute paths like
+// '/favicon.svg' resolve OUTSIDE the app (404). Always build URLs from
+// the registration scope instead.
+const SCOPE = self.registration.scope            // e.g. https://user.github.io/traker/
+
+/** Resolve an app-relative path ('favicon.svg', 'habit/123') against the scope. */
+function scopeUrl(path = '') {
+  return new URL(String(path).replace(/^\//, ''), SCOPE).href
+}
+
+const NOTIFICATION_DEFAULTS = {
+  icon:    scopeUrl('icons/pwa-192x192.png'),
+  badge:   scopeUrl('icons/pwa-192x192.png'),
+  vibrate: [180, 80, 180],
+}
+
 // ── Message handler: show notification from main thread ───────────────────
 //
 // Main thread posts: { type: 'SHOW_NOTIFICATION', title, options }
@@ -41,9 +59,7 @@ self.addEventListener('message', (event) => {
 
   event.waitUntil(
     self.registration.showNotification(title, {
-      icon:               '/favicon.svg',
-      badge:              '/favicon.svg',
-      vibrate:            [180, 80, 180],
+      ...NOTIFICATION_DEFAULTS,
       requireInteraction: false,
       silent:             false,
       ...options,
@@ -51,11 +67,52 @@ self.addEventListener('message', (event) => {
   )
 })
 
+// ── Web Push: show notifications sent by the send-reminders function ──────
+//
+// Payload (JSON): { title, body, tag, data: { url } }
+//
+self.addEventListener('push', (event) => {
+  let payload = {}
+  try {
+    payload = event.data?.json() ?? {}
+  } catch {
+    payload = { body: event.data?.text() ?? '' }
+  }
+
+  event.waitUntil(
+    self.registration.showNotification(payload.title ?? 'Traker', {
+      ...NOTIFICATION_DEFAULTS,
+      body:     payload.body ?? '',
+      tag:      payload.tag  ?? 'traker-push',
+      renotify: true,
+      data:     payload.data ?? {},
+    })
+  )
+})
+
+// ── Push subscription rotated by the browser ──────────────────────────────
+//
+// Best effort: re-subscribe with the same key. The new endpoint is saved
+// to Supabase the next time the app opens (ensurePushSubscription runs on
+// every app start and upserts the current endpoint).
+self.addEventListener('pushsubscriptionchange', (event) => {
+  const oldSub = event.oldSubscription
+  if (!oldSub?.options?.applicationServerKey) return
+
+  event.waitUntil(
+    self.registration.pushManager.subscribe({
+      userVisibleOnly:      true,
+      applicationServerKey: oldSub.options.applicationServerKey,
+    }).catch(() => null)
+  )
+})
+
 // ── Notification click: focus the app ────────────────────────────────────
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
 
-  const targetUrl = event.notification.data?.url ?? '/'
+  // data.url is app-relative (e.g. '/habit/123'); resolve inside the scope
+  const targetUrl = scopeUrl(event.notification.data?.url ?? '')
 
   event.waitUntil(
     self.clients

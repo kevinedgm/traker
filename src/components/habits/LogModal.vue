@@ -94,6 +94,22 @@ function lvlStyle(val) {
   }
 }
 
+/* ── Rescue (when starting is the hard part) ──────── */
+// Functional nudges, rotated daily. Shown only when the day has no
+// log yet — once something is registered, the battle is already won.
+const RESCUE_MESSAGES = [
+  'Haz solo 5 minutos. Eso mantiene el hábito vivo.',
+  'No tiene que salir bien, solo tiene que ocurrir.',
+  'Solo abre el material. Lo demás suele seguir.',
+  'Un mínimo hoy vale más que un perfecto mañana.',
+]
+const rescueMsg = RESCUE_MESSAGES[new Date().getDate() % RESCUE_MESSAGES.length]
+
+function saveMinimal() {
+  level.value = 1
+  save()
+}
+
 /* ── Save ─────────────────────────────────────────── */
 function save() {
   const effectiveLevel = level.value < 0 ? 0 : level.value
@@ -189,6 +205,14 @@ const saveStyle = computed(() => {
               <span class="lm-lvl__sub">{{ lvl.sub }}</span>
             </button>
           </div>
+        </section>
+
+        <!-- Rescue: only before the first log of the day -->
+        <section v-if="!existing" class="lm-rescue" aria-label="Si cuesta empezar">
+          <p class="lm-rescue__msg">{{ rescueMsg }}</p>
+          <button class="lm-rescue__btn" type="button" @click="saveMinimal">
+            Registrar versión mínima
+          </button>
         </section>
 
         <!-- Emotions -->
@@ -486,6 +510,47 @@ const saveStyle = computed(() => {
   text-transform: uppercase;
   margin-bottom: var(--space-3);
 }
+
+/* ── Rescue block ─────────────────────────────────── */
+.lm-rescue {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-xl);
+  border: 1px dashed color-mix(in srgb, var(--hc) 35%, var(--color-border));
+  background: color-mix(in srgb, var(--hc) 5%, var(--color-surface));
+}
+
+.lm-rescue__msg {
+  flex: 1;
+  min-width: 0;
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.lm-rescue__btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.25rem;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-full);
+  border: 1.5px solid color-mix(in srgb, var(--hc) 50%, var(--color-border));
+  background: color-mix(in srgb, var(--hc) 10%, var(--color-surface-raised));
+  color: var(--color-text);
+  font-size: 0.6875rem;
+  font-weight: 800;
+  cursor: pointer;
+  touch-action: manipulation;
+  white-space: nowrap;
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.lm-rescue__btn:active { transform: scale(0.96); }
 
 .lm-section-opt {
   font-weight: 500;

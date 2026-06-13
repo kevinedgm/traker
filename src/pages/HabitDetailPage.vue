@@ -22,6 +22,20 @@ const flexibleDays = computed(() =>
     : 0
 )
 
+// Continuity over the last 7 elapsed days (flexible days count too):
+// rewards showing up this week, even if older days were rough.
+const week = computed(() => {
+  if (!habit.value) return { kept: 0, window: 7 }
+  const cur   = currentDay.value
+  const start = Math.max(1, cur - 6)
+  let kept = 0
+  for (let d = start; d <= cur; d++) {
+    const lvl = habit.value.logs?.[d]?.level
+    if (lvl >= 1 && lvl <= 4) kept++
+  }
+  return { kept, window: cur - start + 1 }
+})
+
 const selectedDay = ref(null)
 const showLog     = ref(false)
 const showOptions = ref(false)
@@ -154,6 +168,10 @@ function deleteHabit() {
           <div class="detail__stat-box">
             <span class="detail__stat-box__val">{{ flexibleDays }}</span>
             <span class="detail__stat-box__label">Flexibles</span>
+          </div>
+          <div class="detail__stat-box">
+            <span class="detail__stat-box__val">{{ week.kept }}/{{ week.window }}</span>
+            <span class="detail__stat-box__label">Esta semana</span>
           </div>
         </div>
 
@@ -523,10 +541,10 @@ function deleteHabit() {
   font-weight: 500;
 }
 
-/* Stat boxes — 3-col row */
+/* Stat boxes — 4-col row */
 .detail__stat-boxes {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: var(--space-2);
 }
 

@@ -40,6 +40,7 @@ function toRemoteHabit(habit, userId) {
     color:         habit.color  ?? null,
     total_days:    habit.duration,
     reminder_time: habit.reminder     ?? null,
+    reminder_days: habit.reminderDays ?? null,
     is_active:     habit.isActive ?? true,
     created_at:    habit.createdAt,
     updated_at:    habit.updatedAt ?? new Date().toISOString(),

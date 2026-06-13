@@ -29,6 +29,8 @@
  *    permission on its own — call requestPermission() first.
  */
 
+import { storage } from '@services/storage'
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function supported() {
@@ -38,6 +40,11 @@ function supported() {
 function swReady() {
   return 'serviceWorker' in navigator
 }
+
+// App base path ('/' in dev, '/traker/' on GitHub Pages).
+// Icon URLs must include it — absolute '/favicon.svg' 404s in production.
+const BASE = import.meta.env.BASE_URL ?? '/'
+const ICON_URL = `${BASE}icons/pwa-192x192.png`
 
 // ── Permission API ─────────────────────────────────────────────────────────
 
@@ -61,6 +68,23 @@ export async function requestPermission() {
   return Notification.requestPermission()
 }
 
+// ── Sent-notification log (for the diagnostics screen) ────────────────────
+
+const LOG_KEY = 'traker:notif-log'
+const LOG_MAX = 20
+
+function _recordSent(title, body) {
+  const log = storage.read(LOG_KEY, [])
+  log.unshift({ title, body: body ?? '', at: new Date().toISOString() })
+  storage.write(LOG_KEY, log.slice(0, LOG_MAX))
+}
+
+/** Most-recent-first list of notifications actually shown on this device. */
+export function getNotificationLog() {
+  const log = storage.read(LOG_KEY, [])
+  return Array.isArray(log) ? log : []
+}
+
 // ── Show notification ──────────────────────────────────────────────────────
 
 /**
@@ -73,31 +97,35 @@ export async function requestPermission() {
  * @param {object}  [options]  — Notification options (body, tag, data, …)
  */
 export async function showNotification(title, options = {}) {
-  if (!supported() || Notification.permission !== 'granted') return
+  if (!supported() || Notification.permission !== 'granted') return false
 
   // Try Service Worker first (survives tab going to background)
   if (swReady()) {
     try {
       const registration = await navigator.serviceWorker.ready
       await registration.showNotification(title, {
-        icon:    '/favicon.svg',
-        badge:   '/favicon.svg',
+        icon:    ICON_URL,
+        badge:   ICON_URL,
         vibrate: [180, 80, 180],
         tag:     options.tag ?? 'traker-reminder',
         renotify: true,
         ...options,
       })
-      return
+      _recordSent(title, options.body)
+      return true
     } catch {
       // SW path failed — fall through to direct API
     }
   }
 
   // Fallback: direct Notification constructor
+  // (throws on Android Chrome, where only the SW path is allowed)
   new Notification(title, {
-    icon: '/favicon.svg',
+    icon: ICON_URL,
     ...options,
   })
+  _recordSent(title, options.body)
+  return true
 }
 
 // ── Scheduler ──────────────────────────────────────────────────────────────
@@ -138,6 +166,82 @@ export function stopScheduler() {
   }
 }
 
+/** True while the in-app reminder scheduler interval is alive. */
+export function isSchedulerRunning() {
+  return _interval !== null
+}
+
+// ── Diagnostics ────────────────────────────────────────────────────────────
+
+/**
+ * Snapshot of everything the diagnostics screen needs to explain
+ * whether notifications can work on this device right now.
+ *
+ * @returns {Promise<{
+ *   supported: boolean,
+ *   permission: string,
+ *   swState: 'active'|'registered'|'none'|'error'|'unsupported',
+ *   pushSubscribed: boolean|null,   // null = Push API not available
+ *   standalone: boolean,            // installed as PWA (display-mode)
+ *   schedulerRunning: boolean,
+ * }>}
+ */
+export async function getDiagnostics() {
+  let swState = 'unsupported'
+  let pushSubscribed = null
+
+  if (swReady()) {
+    swState = 'none'
+    try {
+      const reg = await navigator.serviceWorker.getRegistration()
+      if (reg) {
+        swState = reg.active ? 'active' : 'registered'
+        if (reg.pushManager) {
+          const sub = await reg.pushManager.getSubscription()
+          pushSubscribed = Boolean(sub)
+        }
+      }
+    } catch {
+      swState = 'error'
+    }
+  }
+
+  const standalone =
+    window.matchMedia?.('(display-mode: standalone)')?.matches === true ||
+    window.navigator.standalone === true   // iOS Safari
+
+  return {
+    supported:        supported(),
+    permission:       getPermission(),
+    swState,
+    pushSubscribed,
+    standalone,
+    schedulerRunning: isSchedulerRunning(),
+  }
+}
+
+/**
+ * Fire a test notification through the same path real reminders use.
+ * @returns {Promise<{ ok: boolean, reason?: string }>}
+ */
+export async function sendTestNotification() {
+  if (!supported()) return { ok: false, reason: 'unsupported' }
+  if (Notification.permission !== 'granted') {
+    return { ok: false, reason: Notification.permission }
+  }
+
+  try {
+    const shown = await showNotification('Traker — prueba', {
+      body: 'Si ves esto, las notificaciones funcionan en este dispositivo.',
+      tag:  'traker-test',
+      data: { url: '/settings/notifications' },
+    })
+    return shown ? { ok: true } : { ok: false, reason: 'not-shown' }
+  } catch (err) {
+    return { ok: false, reason: err?.message ?? 'error' }
+  }
+}
+
 /** Evict old keys from _firedKeys so memory stays bounded. */
 function _pruneOldKeys() {
   if (_firedKeys.size < 200) return
@@ -150,7 +254,7 @@ function _pruneOldKeys() {
 
 function _todayStr() {
   const d = new Date()
-  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
+  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`
 }
 
 function _getCurrentDay(habit) {

@@ -1,0 +1,9 @@
+# Supabase project config — Traker
+# Used by the Supabase CLI. Link with:
+#   supabase link --project-ref tuzwecxijdblgihidhyo
+
+project_id = "tuzwecxijdblgihidhyo"
+
+[functions.send-reminders]
+# Invoked by pg_cron with a shared secret, not a user JWT.
+verify_jwt = false

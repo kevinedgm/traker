@@ -13,6 +13,8 @@ import {
   startScheduler,
   showNotification,
 } from '@services/notifications.service'
+import { ensurePushSubscription } from '@services/push.service'
+import { pushSettings } from '@services/supabase/sync.service'
 
 const router        = useRouter()
 const appStore      = useAppStore()
@@ -43,6 +45,9 @@ async function askNotifPermission() {
     settingsStore.notificationsEnabled = true
     startScheduler(() => habitsStore.habits, () => settingsStore.$state)
     showNotification('Traker', { body: '🔔 Notificaciones activadas correctamente' })
+    // Cloud reminders: register this device + sync prefs (no-op if signed out)
+    pushSettings(settingsStore.$state).catch(console.warn)
+    ensurePushSubscription().catch(console.warn)
   }
 }
 
@@ -320,6 +325,18 @@ function resetAllData() {
           <span v-else class="sp-badge sp-badge--ok">
             Activo
           </span>
+        </div>
+
+        <!-- Diagnostics — always reachable, whatever the permission state -->
+        <div class="sp-divider" />
+        <div class="sp-row">
+          <div class="sp-row__text">
+            <span class="sp-row__label">Diagnóstico y prueba</span>
+            <span class="sp-row__sub">Comprueba por qué llegan (o no) los avisos</span>
+          </div>
+          <button class="sp-action-btn" type="button" @click="router.push('/settings/notifications')">
+            Abrir
+          </button>
         </div>
 
         <!-- Info row: configure reminders per habit -->

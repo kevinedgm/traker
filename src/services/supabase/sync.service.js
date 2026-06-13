@@ -29,6 +29,7 @@
 
 import { isSupabaseEnabled } from './client.js'
 import { upsertHabit, deleteHabit, upsertEntry, deleteEntry, bulkUpsertEntries, fetchHabits, fetchEntries } from './habits.service.js'
+import { upsertReminderSettings } from './settings.service.js'
 import { getUser } from './auth.service.js'
 import { storage } from '@services/storage'
 
@@ -150,6 +151,22 @@ export async function flushQueue() {
   console.info(`[sync] Flushed ${q.length} queued operations`)
 }
 
+/**
+ * Push reminder settings to Supabase so the cron can read them.
+ * Fire-and-forget: no-ops when offline / signed out.
+ *
+ * @param {object} settingsState — settings store state
+ */
+export async function pushSettings(settingsState) {
+  if (!isSupabaseEnabled || !isOnline()) return
+
+  const user = await getUser()
+  if (!user) return
+
+  const { error } = await upsertReminderSettings(user.id, settingsState)
+  if (error) console.warn('[sync] pushSettings failed:', error.message)
+}
+
 // ── Pull: Supabase → local ─────────────────────────────────────────────────
 
 /**
@@ -193,7 +210,9 @@ export async function pullAll() {
           duration:     rh.total_days    ?? 30,
           isActive:     rh.is_active     ?? true,
           reminder:     rh.reminder_time ?? null,
-          reminderDays: null,
+          // null still means "unknown" for rows written before migration
+          // 003 — mergeFromCloud keeps the local value in that case.
+          reminderDays: rh.reminder_days ?? null,
           createdAt:    rh.created_at,
           updatedAt:    rh.updated_at ?? rh.created_at,
           flexDays:     [],

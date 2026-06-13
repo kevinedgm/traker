@@ -26,6 +26,12 @@ const routes = [
     meta: { title: 'Ajustes' },
   },
   {
+    path: '/settings/notifications',
+    name: 'notifications-diagnostic',
+    component: () => import('@pages/NotificationsDiagnosticPage.vue'),
+    meta: { title: 'Notificaciones', hideNav: true, hideSidebar: true },
+  },
+  {
     path: '/auth/login',
     name: 'login',
     component: () => import('@pages/auth/LoginPage.vue'),
