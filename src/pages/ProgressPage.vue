@@ -1,11 +1,52 @@
 <script setup>
-import { computed } from 'vue'
-import { BatteryMedium, Brain, Clock3, HeartPulse, ShieldCheck, Sparkles } from 'lucide-vue-next'
+import { computed, ref } from 'vue'
+import { BatteryMedium, Brain, Cloud, Clock3, HeartPulse, LockKeyhole, ShieldCheck, Sparkles } from 'lucide-vue-next'
 import { useHabitsStore } from '@stores/habits'
+import { useCheckinsStore } from '@stores/checkins'
 import { resolveHabitIcon } from '@utils/icons'
+import { checkinEnergyLabel, checkinLoadLabel } from '@/features/checkins/domain.js'
+import DailyCheckinSheet from '@components/checkins/DailyCheckinSheet.vue'
+import { useToast } from '@/composables/useToast'
 
 const store = useHabitsStore()
+const checkinsStore = useCheckinsStore()
+const toast = useToast()
+const selectedCheckin = ref(null)
 const activeHabits = computed(() => store.habits.filter(h => h.isActive !== false))
+const recentCheckins = computed(() => checkinsStore.recentCheckins.slice(0, 7))
+
+function checkinDateLabel(localDate) {
+  const date = new Date(`${localDate}T12:00:00`)
+  const value = new Intl.DateTimeFormat('es-MX', { weekday: 'short', day: 'numeric', month: 'short' }).format(date)
+  return value.charAt(0).toUpperCase() + value.slice(1)
+}
+
+function checkinDescription(checkin) {
+  const parts = []
+  if (checkin.loadFeeling) parts.push(`Carga ${checkinLoadLabel(checkin.loadFeeling).toLowerCase()}`)
+  if (checkin.energy) parts.push(`Energía ${checkinEnergyLabel(checkin.energy).toLowerCase()}`)
+  if (checkin.contextCodes.length) parts.push(checkin.contextCodes.join(', '))
+  return parts.join(' · ') || 'Contexto opcional guardado'
+}
+
+function checkinSyncLabel(checkin) {
+  if (checkin.syncScope === 'local_only') return 'Sólo en este dispositivo'
+  if (checkin.syncStatus === 'synced') return 'Sincronizado con tu cuenta'
+  if (checkin.syncStatus === 'error') return 'No se pudo sincronizar; sigue guardado aquí'
+  return 'Pendiente de sincronizar'
+}
+
+function saveHistoricalCheckin(values) {
+  if (!selectedCheckin.value) return
+  const saved = checkinsStore.saveDailyCheckin(values, selectedCheckin.value.localDate)
+  selectedCheckin.value = null
+  toast.show({
+    message: saved.syncScope === 'local_only'
+      ? 'Cambios guardados sólo en este dispositivo.'
+      : 'Cambios guardados; revisa aquí el estado de sincronización.',
+    tone: 'action',
+  })
+}
 
 const EMOTION_LABELS = {
   motivated:  'motivación',
@@ -215,6 +256,7 @@ const habitRows = computed(() =>
       return {
         day,
         level:    log?.level ?? (day > currentDay ? -1 : 0),
+        isLogged: log !== undefined,
         isToday:  day === currentDay,
         isFuture: day > currentDay,
       }
@@ -258,6 +300,27 @@ const habitRows = computed(() =>
         <span class="pg-summary-card__label">CON CONTEXTO</span>
       </div>
     </div>
+
+    <section v-if="recentCheckins.length" class="pg-checkins" aria-labelledby="checkins-heading">
+      <p id="checkins-heading" class="pg-section__heading">Check-ins recientes</p>
+      <div class="pg-checkins__list">
+        <button v-for="checkin in recentCheckins" :key="checkin.id" type="button" class="pg-checkin-row" @click="selectedCheckin = checkin">
+          <time :datetime="checkin.localDate">{{ checkinDateLabel(checkin.localDate) }}</time>
+          <p>{{ checkinDescription(checkin) }}</p>
+          <span :title="checkinSyncLabel(checkin)">
+            <component :is="checkin.syncScope === 'cloud' ? Cloud : LockKeyhole" :size="15" aria-hidden="true" />
+            <span class="sr-only">{{ checkinSyncLabel(checkin) }}. Abrir para ver o editar.</span>
+          </span>
+        </button>
+      </div>
+    </section>
+
+    <DailyCheckinSheet
+      v-if="selectedCheckin"
+      :checkin="selectedCheckin"
+      @save="saveHistoricalCheckin"
+      @close="selectedCheckin = null"
+    />
 
     <!-- Human insights -->
     <section class="pg-insights" aria-label="Insights útiles">
@@ -321,18 +384,18 @@ const habitRows = computed(() =>
               :key="cell.day"
               class="pg-board__cell"
               :class="{
-                'pg-board__cell--lv0':    cell.level === 0 && !cell.isFuture,
+                'pg-board__cell--empty':  !cell.isLogged && !cell.isFuture,
+                'pg-board__cell--lv0':    cell.level === 0 && cell.isLogged,
                 'pg-board__cell--lv1':    cell.level === 1,
                 'pg-board__cell--lv2':    cell.level === 2,
                 'pg-board__cell--lv3':    cell.level === 3,
                 'pg-board__cell--lv4':    cell.level === 4,
                 'pg-board__cell--future': cell.isFuture && !cell.isToday,
-                'pg-board__cell--today':  cell.isToday  && cell.level === 0,
+                'pg-board__cell--today':  cell.isToday && !cell.isLogged,
               }"
               :title="`Día ${cell.day}`"
             />
           </div>
-
         </div>
       </div>
 
@@ -345,6 +408,7 @@ const habitRows = computed(() =>
 </template>
 
 <style scoped>
+/* impeccable-disable design-system-font-size, design-system-radius -- tamaños y celdas reproducidos del Progress.html aprobado */
 /* ── Page shell ─────────────────────────────────────────── */
 .pg {
   min-height: 100svh;
@@ -421,6 +485,17 @@ const habitRows = computed(() =>
   line-height: 1.2;
 }
 
+/* ── Daily check-ins ─────────────────────────────────────── */
+.pg-checkins__list{border-block:1px solid var(--color-border)}
+.pg-checkin-row{display:grid;width:100%;grid-template-columns:7.5rem minmax(0,1fr) auto;align-items:center;gap:var(--space-3);min-height:3.5rem;padding-block:var(--space-3);border:0;border-bottom:1px solid var(--color-border);background:transparent;text-align:left;cursor:pointer}
+.pg-checkin-row:last-child{border-bottom:0}
+.pg-checkin-row:hover{background:var(--action-secondary-bg)}
+.pg-checkin-row:focus-visible{outline:2px solid var(--color-brand);outline-offset:3px}
+.pg-checkin-row time{color:var(--color-text);font-size:var(--text-xs);font-weight:760;text-transform:capitalize}
+.pg-checkin-row p{margin:0;color:var(--color-text-muted);font-size:var(--text-xs);font-weight:500;line-height:1.45}
+.pg-checkin-row>span{display:grid;width:2rem;height:2rem;place-items:center;color:var(--color-text-faint)}
+@media(max-width:420px){.pg-checkin-row{grid-template-columns:minmax(0,1fr) auto}.pg-checkin-row p{grid-column:1/-1;grid-row:2}.pg-checkin-row>span{grid-column:2;grid-row:1}}
+
 /* ── Human insights ──────────────────────────────────────── */
 .pg-insights {
   display: flex;
@@ -448,11 +523,11 @@ const habitRows = computed(() =>
 }
 
 .pg-insight--green { --insight: var(--color-brand); }
-.pg-insight--blue  { --insight: #74B9FF; }
-.pg-insight--amber { --insight: #FFD166; }
-.pg-insight--violet { --insight: #A78BFA; }
-.pg-insight--soft { --insight: #8F9098; }
-.pg-insight--calm { --insight: rgba(255,255,255,0.42); }
+.pg-insight--blue  { --insight: var(--accent-focus); }
+.pg-insight--amber { --insight: var(--status-warning); }
+.pg-insight--violet { --insight: var(--accent-reflect); }
+.pg-insight--soft { --insight: var(--text-muted); }
+.pg-insight--calm { --insight: var(--text-muted); }
 
 .pg-insight__icon {
   width: 2.25rem;
@@ -574,7 +649,6 @@ const habitRows = computed(() =>
   height: 100%;
   border-radius: inherit;
   background: var(--hc);
-  transition: width 700ms var(--ease-standard);
 }
 
 /* ── Contribution board ─────────────────────────────────── */
@@ -590,7 +664,8 @@ const habitRows = computed(() =>
   transition: background-color var(--duration-base) var(--ease-standard);
 }
 
-.pg-board__cell--lv0    { background: var(--color-surface-raised); }
+.pg-board__cell--empty  { background: transparent; box-shadow: inset 0 0 0 1px var(--color-border); }
+.pg-board__cell--lv0    { background: var(--text-muted); opacity: .5; }
 .pg-board__cell--lv1    { background: color-mix(in srgb, var(--hc) 22%, var(--color-surface-raised)); }
 .pg-board__cell--lv2    { background: color-mix(in srgb, var(--hc) 60%, var(--color-surface)); }
 .pg-board__cell--lv3    {
@@ -598,8 +673,8 @@ const habitRows = computed(() =>
   box-shadow: 0 0 4px color-mix(in srgb, var(--hc) 40%, transparent);
 }
 .pg-board__cell--lv4 {
-  background: rgba(143, 144, 152, 0.18);
-  box-shadow: inset 0 0 0 1px rgba(143, 144, 152, 0.38);
+  background: var(--progress-skipped);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
 }
 .pg-board__cell--future {
   background: var(--color-surface-raised);
@@ -643,4 +718,39 @@ const habitRows = computed(() =>
     gap: 4px;
   }
 }
+
+/* Dashboard Hoy design reference */
+.pg{box-sizing:border-box;width:100%;max-width:640px;min-height:100svh;margin-inline:auto;padding:52px 20px 40px;gap:28px;background:transparent}
+.pg-header__title{margin:0;color:var(--text-primary);font:600 30px/1.15 var(--font-core);letter-spacing:-.02em}
+.pg-header__sub{margin:6px 0 0;color:var(--text-secondary);font:400 14px/1.5 var(--font-core);text-wrap:pretty}
+.pg-summary{gap:10px}
+.pg-summary-card{padding:14px 10px;gap:4px;border:1px solid var(--border-subtle);border-radius:var(--radius-lg);background:var(--surface-primary);box-shadow:none}
+.pg-summary-card--primary{border-color:var(--border-accent);background:var(--aurora-veil),var(--surface-primary)}
+.pg-summary-card__val{color:var(--text-primary);font:600 24px/1 var(--font-numeric);font-variant-numeric:tabular-nums;letter-spacing:0}
+.pg-summary-card--primary .pg-summary-card__val{color:var(--action-primary)}
+.pg-summary-card__label{color:var(--text-muted);font:600 10px/1.3 var(--font-core);letter-spacing:.06em}
+.pg-insights,.pg-section{display:flex;flex-direction:column;gap:12px}
+.pg-section__heading{margin:0;color:var(--text-muted);font:600 11px/1 var(--font-core);letter-spacing:.08em}
+.pg-insight-list{gap:10px}
+.pg-insight{display:flex;padding:14px;align-items:flex-start;gap:12px;border:1px solid var(--border-subtle);border-radius:var(--radius-lg);background:var(--surface-primary)}
+.pg-insight__icon{width:36px;height:36px;flex:none;border-radius:14px;background:color-mix(in srgb,var(--insight) 14%,transparent)}
+.pg-insight__copy h2{margin:0;color:var(--text-primary);font:600 14px/1.25 var(--font-core);letter-spacing:-.01em}
+.pg-insight__copy p{margin:4px 0 0;color:var(--text-secondary);font:400 13px/1.5 var(--font-core);text-wrap:pretty}
+.pg-habit-list{gap:14px}
+.pg-habit-card{padding:16px;gap:12px;border:1px solid var(--border-subtle);border-radius:var(--radius-lg);background:var(--surface-primary)}
+.pg-habit-card__header{gap:10px}.pg-habit-card__icon{width:36px;height:36px;border-radius:14px;background:color-mix(in srgb,var(--hc) 14%,transparent);color:var(--hc)}
+.pg-habit-card__name{color:var(--text-primary);font:600 14px/1.3 var(--font-core)}
+.pg-habit-card__meta{color:var(--text-muted);font:500 12px/1.3 var(--font-core)}
+.pg-habit-card__pct{color:var(--hc);font:600 12px/1 var(--font-numeric);letter-spacing:0}
+.pg-habit-card__bar{height:3px;background:var(--progress-none)}
+.pg-board{grid-template-columns:repeat(10,1fr);gap:4px}.pg-board__cell{border-radius:3px;box-shadow:none}
+.pg-board__cell--lv0{border:1px solid var(--border-subtle);background:var(--progress-none)}
+.pg-board__cell--lv1{background:color-mix(in srgb,var(--hc) 30%,var(--progress-none))}
+.pg-board__cell--lv2{background:color-mix(in srgb,var(--hc) 65%,transparent)}
+.pg-board__cell--lv3{background:var(--hc);box-shadow:none}
+.pg-board__cell--lv4{border:1.5px dashed var(--progress-adapted);background:transparent;box-shadow:none}
+.pg-board__cell--future{border:0;background:var(--progress-none);opacity:.28}
+.pg-board__cell--today{border:2px solid var(--action-primary);background:var(--progress-none);box-shadow:none}
+.pg-empty{padding:32px 0;color:var(--text-muted);font:400 14px/1.5 var(--font-core)}
+@media(min-width:768px){.pg{padding:48px}.pg-board{grid-template-columns:repeat(15,1fr)}}
 </style>

@@ -9,21 +9,28 @@
  */
 
 import { createClient } from '@supabase/supabase-js'
+import { SUPABASE_KEY, SUPABASE_URL } from './config.js'
+import { KEYS } from '@/services/storage.js'
+import { createTimedFetch, DEFAULT_REQUEST_TIMEOUT_MS } from './timedFetch.js'
 
-const URL = import.meta.env.VITE_SUPABASE_URL ?? ''
-const KEY =
-  import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ??
-  import.meta.env.VITE_SUPABASE_ANON_KEY ??
-  ''
+const configuredTimeout = Number(import.meta.env.VITE_SUPABASE_REQUEST_TIMEOUT_MS)
+export const SUPABASE_REQUEST_TIMEOUT_MS = Number.isFinite(configuredTimeout) && configuredTimeout > 0
+  ? configuredTimeout
+  : DEFAULT_REQUEST_TIMEOUT_MS
 
-export const supabase = (URL && KEY)
-  ? createClient(URL, KEY, {
+const timedFetch = typeof globalThis.fetch === 'function'
+  ? createTimedFetch(globalThis.fetch.bind(globalThis), { timeoutMs: SUPABASE_REQUEST_TIMEOUT_MS })
+  : undefined
+
+export const supabase = (SUPABASE_URL && SUPABASE_KEY)
+  ? createClient(SUPABASE_URL, SUPABASE_KEY, {
       auth: {
         persistSession:     true,
         autoRefreshToken:   true,
         detectSessionInUrl: true,
-        storageKey:         'traker:supabase-session',
+        storageKey:         KEYS.SUPABASE_SESSION,
       },
+      global: timedFetch ? { fetch: timedFetch } : undefined,
     })
   : null
 

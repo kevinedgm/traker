@@ -1,0 +1,3 @@
+<script setup>defineProps({level:{default:2},radius:{default:'var(--radius-lg)'},padding:{default:'var(--pad-card, 16px)'},accent:Boolean,as:{default:'section'}})</script>
+<template><component :is="as" class="a-surface" :class="[`a-surface--${level}`,{'a-surface--accent':accent,'aurora-glass':level===3}]" :style="{borderRadius:radius,padding}"><slot/></component></template>
+<style scoped>.a-surface{border:1px solid var(--border-subtle);background:var(--surface-primary)}.a-surface--2{box-shadow:var(--elev-2)}.a-surface--3{box-shadow:var(--elev-3)}.a-surface--4{background:var(--surface-secondary);box-shadow:var(--elev-4)}.a-surface--accent{border-color:var(--border-accent);background:var(--aurora-veil),var(--surface-primary)}</style>

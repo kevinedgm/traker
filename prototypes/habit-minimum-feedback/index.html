@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="es" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Traker · Feedback de mínimo de hábito</title>
+  <link rel="stylesheet" href="/src/assets/aurora.css" />
+  <link rel="stylesheet" href="./prototype.css" />
+</head>
+<body>
+  <main class="proto-scene">
+    <section class="scene-copy" aria-hidden="true">
+      <span>Miércoles, 26 de agosto</span>
+      <h1>Buenas tardes, Alex</h1>
+      <div class="scene-card"><i></i><div><strong>Leer antes de dormir</strong><small>Versión mínima: una página</small></div><b>○</b></div>
+      <div class="scene-card"><i></i><div><strong>Caminar</strong><small>Completo hoy</small></div><b>✓</b></div>
+    </section>
+    <div class="scene-scrim"></div>
+    <section id="stage" class="proto-stage" aria-live="polite"></section>
+  </main>
+
+  <nav class="proto-picker" data-position="top" aria-label="Prototype variants">
+    <span class="proto-picker-highlight" aria-hidden="true"></span>
+    <button class="proto-picker-item" data-active aria-current="true">Pulso</button>
+    <button class="proto-picker-item">Trayectoria</button>
+    <button class="proto-picker-item">Día integrado</button>
+    <span class="proto-picker-divider" aria-hidden="true"></span>
+    <button class="proto-picker-item proto-picker-replay" aria-label="Replay animation (R)">↻</button>
+  </nav>
+  <script type="module" src="./prototype.js"></script>
+</body>
+</html>

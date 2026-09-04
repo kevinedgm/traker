@@ -19,18 +19,17 @@ export default defineConfig(({ command }) => {
       filename:   'sw.js',
 
       // Only include assets that actually exist
-      includeAssets: ['favicon.svg', 'icons/*.svg', 'icons/*.png'],
+      includeAssets: ['brand/koto-logo.svg', 'icons/*.svg', 'icons/*.png'],
 
       manifest: {
-        name: 'Traker — Seguimiento de hábitos',
+        name: 'Traker — hábitos, metas y continuidad',
         short_name: 'Traker',
-        description: 'Rastrea tus hábitos día a día. Offline-first, rápido y minimalista.',
+        description: 'Organiza hábitos, metas, registros y cierres diarios con una experiencia local-first.',
         lang: 'es',
         dir: 'ltr',
         start_url: base,
         scope: base,
         display: 'standalone',
-        orientation: 'portrait',
         theme_color: '#0B0D10',
         background_color: '#0B0D10',
 
@@ -57,12 +56,6 @@ export default defineConfig(({ command }) => {
           },
           // SVG — modern browsers (Chrome 80+, Firefox, Safari 16+)
           {
-            src: 'favicon.svg',
-            sizes: 'any',
-            type: 'image/svg+xml',
-            purpose: 'any',
-          },
-          {
             src: 'icons/pwa-512x512.svg',
             sizes: '512x512',
             type: 'image/svg+xml',
@@ -72,16 +65,22 @@ export default defineConfig(({ command }) => {
 
         shortcuts: [
           {
-            name: 'Ver hábitos',
-            short_name: 'Hábitos',
+            name: 'Abrir Hoy',
+            short_name: 'Hoy',
             url: base,
-            icons: [{ src: 'favicon.svg', sizes: 'any', type: 'image/svg+xml' }],
+            icons: [{ src: 'icons/pwa-192x192.png', sizes: '192x192', type: 'image/png' }],
           },
           {
-            name: 'Ajustes',
-            short_name: 'Ajustes',
-            url: `${base}settings`,
-            icons: [{ src: 'favicon.svg', sizes: 'any', type: 'image/svg+xml' }],
+            name: 'Abrir Rumbo',
+            short_name: 'Rumbo',
+            url: `${base}goals`,
+            icons: [{ src: 'icons/pwa-192x192.png', sizes: '192x192', type: 'image/png' }],
+          },
+          {
+            name: 'Abrir Hábitos',
+            short_name: 'Hábitos',
+            url: `${base}habits`,
+            icons: [{ src: 'icons/pwa-192x192.png', sizes: '192x192', type: 'image/png' }],
           },
         ],
       },
@@ -128,12 +127,15 @@ export default defineConfig(({ command }) => {
           if (id.includes('node_modules/vue') || id.includes('node_modules/pinia') || id.includes('node_modules/vue-router')) {
             return 'vue-vendor'
           }
-          if (id.includes('node_modules/lucide-vue-next')) {
-            return 'icons'
-          }
         },
       },
     },
+  },
+  test: {
+    environment: 'happy-dom',
+    setupFiles: ['./src/test/setup.js'],
+    include: ['src/**/*.test.js'],
+    clearMocks: true,
   },
   }
 })

@@ -3,12 +3,15 @@
  * Pinia store — runtime UI state.
  *
  * `theme` is persisted via the persistence plugin.
- * `notifications` and `sidebarOpen` are ephemeral (session-only).
+ * `sidebarOpen` is ephemeral (session-only).
  *
  * The `applyTheme()` / `initTheme()` functions handle the DOM
  * class toggle and the system-preference media-query listener.
  * main.js calls storage directly to apply the theme BEFORE
  * the Vue app mounts (prevents flash of wrong theme).
+ *
+ * Toast notifications are handled by src/composables/useToast.js +
+ * ToastHost.vue, not by this store.
  */
 
 import { defineStore } from 'pinia'
@@ -22,7 +25,6 @@ export const useAppStore = defineStore(
     // Starts with 'system'; plugin hydrates the saved preference.
     const theme         = ref('system')
     const sidebarOpen   = ref(true)        // not persisted
-    const notifications = ref([])          // not persisted
 
     // ── Computed ───────────────────────────────────────────────
     const isDark = computed(() => {
@@ -38,6 +40,7 @@ export const useAppStore = defineStore(
       const dark = isDark.value
       document.documentElement.classList.toggle('dark',  dark)
       document.documentElement.classList.toggle('light', !dark)
+      document.documentElement.dataset.theme = dark ? 'dark' : 'light'
     }
 
     /**
@@ -69,29 +72,14 @@ export const useAppStore = defineStore(
       sidebarOpen.value = !sidebarOpen.value
     }
 
-    // ── Toast notifications ────────────────────────────────────
-    function addNotification({ type = 'info', message, duration = 4000 }) {
-      const id = Date.now()
-      notifications.value.push({ id, type, message })
-      if (duration > 0) setTimeout(() => removeNotification(id), duration)
-      return id
-    }
-
-    function removeNotification(id) {
-      notifications.value = notifications.value.filter(n => n.id !== id)
-    }
-
     return {
       theme,
       isDark,
       sidebarOpen,
-      notifications,
       initTheme,
       setTheme,
       toggleTheme,
       toggleSidebar,
-      addNotification,
-      removeNotification,
     }
   },
 
@@ -99,7 +87,7 @@ export const useAppStore = defineStore(
   {
     persist: {
       key:  'traker:app',
-      // Only persist theme. sidebarOpen & notifications are ephemeral.
+      // Only persist theme. sidebarOpen is ephemeral.
       pick: ['theme'],
 
       serialize(state) {

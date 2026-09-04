@@ -18,7 +18,6 @@ const cells = computed(() =>
     return {
       day,
       level:    log?.level   ?? 0,
-      emotion:  log?.emotion ?? null,
       isFuture: day > props.currentDay,
       isToday:  day === props.currentDay,
     }
@@ -32,7 +31,7 @@ const cells = computed(() =>
     <!-- ── Contribution grid ── -->
     <div
       class="dg-grid"
-      role="grid"
+      role="group"
       :aria-label="`Seguimiento de ${habit.name}, ${habit.duration} días`"
     >
       <DayCell
@@ -43,7 +42,6 @@ const cells = computed(() =>
         :color="habit.color"
         :is-today="cell.isToday"
         :is-future="cell.isFuture"
-        :emotion="cell.emotion"
         :is-selected="selectedDay === cell.day"
         @tap="emit('cell-tap', cell.day)"
       />
@@ -59,6 +57,7 @@ const cells = computed(() =>
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+  container-type: inline-size;
 }
 
 /* ═══════════════════════════════════════════════════
@@ -66,25 +65,17 @@ const cells = computed(() =>
    ═══════════════════════════════════════════════════ */
 .dg-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(5, minmax(var(--touch-min), 68px));
+  gap: var(--space-3);
+  justify-content: space-between;
   width: 100%;
-  max-width: 380px;
-  margin-inline: auto;
 }
 
-@media (min-width: 768px) {
-  .dg-grid {
-    max-width: 400px;
-    gap: 11px;
-  }
+@container (min-width: 420px) {
+  .dg-grid { grid-template-columns: repeat(7, minmax(var(--touch-min), 68px)); }
 }
 
-@media (min-width: 1024px) {
-  .dg-grid {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-    max-width: 400px;
-    gap: 12px;
-  }
+@container (min-width: 560px) {
+  .dg-grid { grid-template-columns: repeat(8, minmax(var(--touch-min), 68px)); }
 }
 </style>

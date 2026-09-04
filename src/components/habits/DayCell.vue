@@ -68,7 +68,7 @@ const LEVEL_LABELS = {
 
   /* Shape */
   border-radius: var(--radius-cell);
-  border: 1px solid rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-subtle);
 
   /* Interaction */
   cursor: pointer;
@@ -119,16 +119,15 @@ const LEVEL_LABELS = {
   background-color: color-mix(in srgb, var(--dc) 60%, var(--color-surface));
 }
 
-/* Level 3: excelente — full habit color + glow */
+/* Level 3: excelente — full habit color */
 .dc--lv3 {
   background-color: var(--dc);
-  box-shadow: 0 0 10px color-mix(in srgb, var(--dc) 45%, transparent);
 }
 
 /* Level 4: día flexible — continuity without progress */
 .dc--lv4 {
-  background: rgba(143, 144, 152, 0.14);
-  border-color: rgba(143, 144, 152, 0.34);
+  background: var(--progress-skipped);
+  border-color: var(--border-strong);
 }
 
 /* ═══════════════════════════════════════════════════
@@ -138,7 +137,6 @@ const LEVEL_LABELS = {
 .dc--today {
   z-index: 1;
   border: 2px solid var(--dc);
-  box-shadow: var(--shadow-glow);
 }
 
 /* No log yet today */
@@ -170,23 +168,23 @@ const LEVEL_LABELS = {
   transition: color 380ms ease;
 
   /* Default: faint for empty / future */
-  color: rgba(255, 255, 255, 0.82);
+  color: var(--text-primary);
 }
 
 /* Levels 1-3: dark number for contrast on filled backgrounds */
 .dc--lv1 .dc__num {
   /* On 22% tint the bg is still dark, keep white-ish */
-  color: color-mix(in srgb, var(--dc) 90%, rgba(255,255,255,0.7));
+  color: color-mix(in srgb, var(--dc) 90%, var(--text-primary));
 }
 
 .dc--lv2 .dc__num,
 .dc--lv3 .dc__num {
   /* On 60-100% fill use very dark text for contrast */
-  color: color-mix(in srgb, var(--dc) 20%, #0B0D10);
+  color: color-mix(in srgb, var(--dc) 20%, var(--text-on-accent));
 }
 
 .dc--lv4 .dc__num {
-  color: rgba(255, 255, 255, 0.72);
+  color: var(--text-secondary);
 }
 
 /* Larger font on desktop for roomier cells */
@@ -198,6 +196,5 @@ const LEVEL_LABELS = {
 
 .dc--selected {
   border: 2px solid var(--dc) !important;
-  box-shadow: var(--shadow-hover-glow) !important;
 }
 </style>

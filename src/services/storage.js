@@ -18,16 +18,27 @@
 // Constants
 // ─────────────────────────────────────────────────────────────
 
-export const SCHEMA_VERSION = 1
+export const SCHEMA_VERSION = 3
 
 /** All localStorage keys used by the app. Import KEYS wherever
  *  you need a key instead of hardcoding a string. */
 export const KEYS = Object.freeze({
-  HABITS:   'traker:habits',
-  AUTH:     'traker:pin',      // raw PIN (backward-compat key)
-  APP:      'traker:app',      // theme, etc.
-  SETTINGS: 'traker:settings',
-  META:     'traker:meta',     // schema version, first/last opened
+  HABITS:     'traker:habits',
+  CHECKINS:   'traker:checkins',
+  REWARDS:    'traker:rewards',
+  DAY_CLOSURES: 'traker:day-closures',
+  FLEXIBLE_GROUPS: 'traker:flexible-groups',
+  AUTH:       'traker:pin',      // raw PIN (backward-compat key)
+  APP:        'traker:app',      // theme, etc.
+  SETTINGS:   'traker:settings',
+  META:       'traker:meta',     // schema version, first/last opened
+  COPY_STATE: 'traker:copy-state', // local-only copy history, saved/disabled ids and feedback
+  DEVICE_ID:  'traker:device-id',
+  PUSH_ACTIVE: 'traker:push-active',
+  SYNC_QUEUE: 'traker:sync-queue',
+  NOTIFICATION_LOG: 'traker:notif-log',
+  SUPABASE_SESSION: 'traker:supabase-session',
+  API_TOKEN: 'traker:token',
 })
 
 // ─────────────────────────────────────────────────────────────
@@ -108,6 +119,25 @@ const MIGRATIONS = {
       })),
     }
   },
+  2(data) {
+    return data
+  },
+  3(data) {
+    return { ...data, flexibleGroups: data?.flexibleGroups ?? { groups: [] } }
+  },
+}
+
+function removeLegacyDailyGateKeys() {
+  try {
+    const keys = []
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index)
+      if (key?.startsWith('traker.') && key.includes('.shownOn.')) keys.push(key)
+    }
+    keys.forEach(safeRemove)
+  } catch {
+    // Storage cleanup is best-effort; normal app data remains untouched.
+  }
 }
 
 /**
@@ -177,12 +207,29 @@ export const storage = {
    */
   bootstrap() {
     const meta        = getMeta()
-    const fromVersion = meta.schemaVersion ?? 0
+    const parsedVersion = Number(meta.schemaVersion)
+    const fromVersion = Number.isFinite(parsedVersion) ? parsedVersion : 0
+
+    // A cached, older app bundle must never open data written by a newer
+    // contract. Mounting Pinia would allow its persistence plugin to rewrite
+    // unknown fields and `stamp()` would silently downgrade the schema marker.
+    if (fromVersion > SCHEMA_VERSION) {
+      console.warn(`[storage] schema v${fromVersion} requires a newer app bundle; startup paused`)
+      return {
+        status: 'blocked_newer_schema',
+        fromVersion,
+        supportedVersion: SCHEMA_VERSION,
+      }
+    }
 
     if (fromVersion < SCHEMA_VERSION) {
       // Assemble bundle from individual keys
       const bundle = {
         habits:   safeRead(KEYS.HABITS, []),
+        checkins: safeRead(KEYS.CHECKINS, { checkins: [] }),
+        rewards: safeRead(KEYS.REWARDS, { rewards: [], claims: [] }),
+        dayClosures: safeRead(KEYS.DAY_CLOSURES, { closures: [] }),
+        flexibleGroups: safeRead(KEYS.FLEXIBLE_GROUPS, { groups: [] }),
         settings: safeRead(KEYS.SETTINGS, {}),
         app:      safeRead(KEYS.APP, {}),
       }
@@ -191,11 +238,21 @@ export const storage = {
 
       // Persist migrated data back
       if (migrated.habits)   safeWrite(KEYS.HABITS,   migrated.habits)
+      if (migrated.checkins) safeWrite(KEYS.CHECKINS, migrated.checkins)
+      if (migrated.rewards) safeWrite(KEYS.REWARDS, migrated.rewards)
+      if (migrated.dayClosures) safeWrite(KEYS.DAY_CLOSURES, migrated.dayClosures)
+      if (migrated.flexibleGroups) safeWrite(KEYS.FLEXIBLE_GROUPS, migrated.flexibleGroups)
       if (migrated.settings) safeWrite(KEYS.SETTINGS, migrated.settings)
       if (migrated.app)      safeWrite(KEYS.APP,       migrated.app)
+      if (fromVersion < 2) removeLegacyDailyGateKeys()
     }
 
     this.stamp()
+    return {
+      status: fromVersion < SCHEMA_VERSION ? 'migrated' : 'ready',
+      fromVersion,
+      supportedVersion: SCHEMA_VERSION,
+    }
   },
 
   // ── Cross-tab sync ───────────────────────────────────────────
@@ -223,13 +280,24 @@ export const storage = {
    * Export all app data as a JSON-serialisable object.
    * Suitable for file download / cloud backup.
    */
-  exportData() {
+  exportData({ includeEmotions } = {}) {
+    const settings = safeRead(KEYS.SETTINGS, {})
+    const emotionsIncluded = includeEmotions ?? settings.includeEmotionsInExport !== false
+    const checkins = safeRead(KEYS.CHECKINS, { checkins: [] })
     return {
       _schema:     SCHEMA_VERSION,
       _exportedAt: new Date().toISOString(),
+      _privacy:    { emotionsIncluded },
       habits:      safeRead(KEYS.HABITS,   []),
-      settings:    safeRead(KEYS.SETTINGS, {}),
+      checkins:    emotionsIncluded ? checkins : { ...checkins, checkins: [] },
+      rewards:     safeRead(KEYS.REWARDS, { rewards: [], claims: [] }),
+      dayClosures: safeRead(KEYS.DAY_CLOSURES, { closures: [] }),
+      flexibleGroups: safeRead(KEYS.FLEXIBLE_GROUPS, { groups: [] }),
+      settings,
       app:         safeRead(KEYS.APP,      {}),
+      copyState:   safeRead(KEYS.COPY_STATE, null),
+      syncQueue:   safeRead(KEYS.SYNC_QUEUE, []),
+      notificationLog: safeRead(KEYS.NOTIFICATION_LOG, []),
     }
   },
 
@@ -245,15 +313,25 @@ export const storage = {
       throw new Error(`Backup requires schema v${bundle._schema}, app is on v${SCHEMA_VERSION}`)
     }
     if (bundle.habits)   safeWrite(KEYS.HABITS,   bundle.habits)
+    if (bundle.checkins) safeWrite(KEYS.CHECKINS, bundle.checkins)
+    if (bundle.rewards) safeWrite(KEYS.REWARDS, bundle.rewards)
+    if (bundle.dayClosures) safeWrite(KEYS.DAY_CLOSURES, bundle.dayClosures)
+    if (bundle.flexibleGroups) safeWrite(KEYS.FLEXIBLE_GROUPS, bundle.flexibleGroups)
     if (bundle.settings) safeWrite(KEYS.SETTINGS, bundle.settings)
     if (bundle.app)      safeWrite(KEYS.APP,       bundle.app)
+    if (bundle.copyState) safeWrite(KEYS.COPY_STATE, bundle.copyState)
+    if (bundle.syncQueue) safeWrite(KEYS.SYNC_QUEUE, bundle.syncQueue)
+    if (bundle.notificationLog) safeWrite(KEYS.NOTIFICATION_LOG, bundle.notificationLog)
     this.stamp()
   },
 
   // ── Nuclear option ───────────────────────────────────────────
 
   /** Remove ALL traker keys from localStorage (used on account reset). */
-  clearAll() {
-    Object.values(KEYS).forEach(safeRemove)
+  clearAll({ preserveSessions = false } = {}) {
+    const preserved = preserveSessions
+      ? new Set([KEYS.SUPABASE_SESSION, KEYS.API_TOKEN])
+      : new Set()
+    Object.values(KEYS).filter(key => !preserved.has(key)).forEach(safeRemove)
   },
 }

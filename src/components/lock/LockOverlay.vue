@@ -1,8 +1,12 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useAuthStore } from '@stores/auth'
+import { useModalFocus } from '@/composables/useModalFocus'
+import { Delete } from 'lucide-vue-next'
 
 const auth = useAuthStore()
+const overlay = ref(null)
+useModalFocus(overlay, { initialFocus: '[data-pin-key]' })
 
 // ── Clock ────────────────────────────────────────────────────────────────
 const hh      = ref('00')
@@ -21,8 +25,22 @@ function tick() {
 }
 
 let timer
-onMounted(() => { tick(); timer = setInterval(tick, 1000) })
-onUnmounted(() => clearInterval(timer))
+let previousHtmlOverflow = ''
+
+onMounted(() => {
+  tick()
+  timer = setInterval(tick, 1000)
+
+  // The lock screen is modal. Keep the app underneath from scrolling while
+  // the fixed overlay is present, then restore the caller's original styles.
+  previousHtmlOverflow = document.documentElement.style.overflow
+  document.documentElement.style.overflow = 'hidden'
+})
+
+onUnmounted(() => {
+  clearInterval(timer)
+  document.documentElement.style.overflow = previousHtmlOverflow
+})
 
 // ── PIN state ────────────────────────────────────────────────────────────
 const entered      = ref('')
@@ -99,7 +117,7 @@ async function handleComplete(val) {
 
 async function onSuccess() {
   successState.value = true
-  // Dots pulse green — brief pause before overlay slides away
+  // Dots pulse in accent color — brief pause before overlay slides away
   await sleep(400)
   auth.open() // isLocked = false → Transition leave → slide up
 }
@@ -130,131 +148,156 @@ const KEYS = ['1','2','3','4','5','6','7','8','9']
     This element is the one <Transition name="lock"> animates on removal.
   -->
   <div
-    class="fixed inset-0 z-[999] flex flex-col items-center overflow-hidden select-none"
-    style="background: linear-gradient(155deg, #0d1117 0%, #060508 48%, #0c0912 100%)"
+    ref="overlay"
+    class="lock-overlay overflow-hidden select-none"
+    role="dialog"
+    aria-modal="true"
+    aria-label="Pantalla de bloqueo de Traker"
+    aria-describedby="lock-subtitle"
+    tabindex="-1"
   >
+    <div class="lock-aurora aurora-ambient flex h-full w-full flex-col items-center overflow-hidden">
 
-    <!-- ── Subtle noise overlay ───────────────────────────────────────── -->
-    <div class="absolute inset-0 opacity-[0.025] pointer-events-none"
-         style="background-image: url('data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22><filter id=%22n%22><feTurbulence type=%22fractalNoise%22 baseFrequency=%220.9%22 numOctaves=%224%22/></filter><rect width=%22200%22 height=%22200%22 filter=%22url(%23n)%22 opacity=%221%22/></svg>')" />
+    <!-- ── Grain, consistent with the rest of Aurora ─────────────────── -->
+    <div class="absolute inset-0 pointer-events-none" style="opacity: var(--grain-opacity); background-image: url('data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22><filter id=%22n%22><feTurbulence type=%22fractalNoise%22 baseFrequency=%220.9%22 numOctaves=%224%22/></filter><rect width=%22200%22 height=%22200%22 filter=%22url(%23n)%22 opacity=%221%22/></svg>')" />
 
     <!-- ── Top: Clock ─────────────────────────────────────────────────── -->
     <div class="flex-1 flex flex-col items-center justify-end pb-10 pt-16 w-full">
 
       <!-- Time -->
-      <div class="flex items-baseline leading-none tabular-nums" style="gap: 2px">
-        <span
-          class="font-[200] text-white"
-          style="font-size: clamp(76px, 21vw, 104px); letter-spacing: -3px"
-        >{{ hh }}</span>
-        <span
-          class="font-[200] text-white/40"
-          style="font-size: clamp(76px, 21vw, 104px); letter-spacing: -1px; margin: 0 1px"
-        >:</span>
-        <span
-          class="font-[200] text-white"
-          style="font-size: clamp(76px, 21vw, 104px); letter-spacing: -3px"
-        >{{ mm }}</span>
+      <div class="lock-time flex items-baseline leading-none tabular-nums" style="gap: 2px">
+        <span class="lock-time__num">{{ hh }}</span>
+        <span class="lock-time__colon">:</span>
+        <span class="lock-time__num">{{ mm }}</span>
       </div>
 
       <!-- Date -->
-      <p class="text-[14px] font-light text-white/35 mt-3 capitalize tracking-[0.01em]">
-        {{ dateStr }}
-      </p>
+      <p class="lock-date capitalize">{{ dateStr }}</p>
 
       <!-- App name -->
-      <p class="mt-8 text-[10px] font-light text-white/15 tracking-[0.32em] uppercase">
-        Traker
-      </p>
+      <p class="lock-wordmark">Traker</p>
     </div>
 
     <!-- ── Middle: PIN dots ───────────────────────────────────────────── -->
     <div class="flex flex-col items-center gap-5 py-8">
-      <div
-        class="flex"
-        style="gap: 20px"
-        :class="{ 'animate-shake': shaking }"
-      >
+      <div class="flex" style="gap: 20px" :class="{ 'animate-shake': shaking }">
         <div
           v-for="(dot, i) in dots"
           :key="i"
-          class="rounded-full transition-all duration-200 ease-out"
+          class="lock-dot"
           :class="{
-            // empty
-            'w-[13px] h-[13px] border-[1.5px] border-white/25 bg-transparent': dot === 0,
-            // filled
-            'w-[13px] h-[13px] bg-white border-white scale-[1.18]': dot === 1,
-            // error
-            'w-[13px] h-[13px] bg-red-400 border-transparent scale-[1.18]': dot === 2,
-            // success
-            'w-[13px] h-[13px] border-transparent scale-[1.18]': dot === 3,
+            'lock-dot--empty': dot === 0,
+            'lock-dot--filled': dot === 1,
+            'lock-dot--error': dot === 2,
+            'lock-dot--success': dot === 3,
           }"
-          :style="dot === 3 ? { backgroundColor: '#CCFF00', boxShadow: '0 0 12px rgba(204,255,0,0.55)' } : {}"
         />
       </div>
 
       <!-- Subtitle / error -->
-      <p
-        class="text-[13px] font-light tracking-wide transition-all duration-300 h-5"
-        :class="errorState ? 'text-red-400/70' : 'text-white/28'"
-      >
+      <p id="lock-subtitle" class="lock-subtitle h-5" :class="{ 'lock-subtitle--error': errorState }" aria-live="polite">
         {{ subtitle }}
       </p>
     </div>
 
     <!-- ── Bottom: Numpad ─────────────────────────────────────────────── -->
-    <div class="flex-1 flex items-start justify-center pt-5 pb-14">
+    <div class="flex-1 flex items-start justify-center pt-5 pb-12">
       <div>
         <!-- Row 1–9 -->
-        <div class="grid grid-cols-3" style="gap: 13px; grid-template-columns: repeat(3, 76px)">
-          <button
-            v-for="k in KEYS"
-            :key="k"
-            class="np-btn"
-            @click="pressKey(k)"
-          >{{ k }}</button>
+        <div class="grid grid-cols-3" style="gap: 13px; grid-template-columns: repeat(3, 72px)">
+          <button v-for="k in KEYS" :key="k" type="button" class="np-btn" data-pin-key @click="pressKey(k)">{{ k }}</button>
         </div>
 
         <!-- Row 0 -->
-        <div class="grid grid-cols-3 mt-[13px]" style="gap: 13px; grid-template-columns: repeat(3, 76px)">
-          <!-- Empty slot -->
+        <div class="grid grid-cols-3 mt-[13px]" style="gap: 13px; grid-template-columns: repeat(3, 72px)">
           <div />
-
-          <button class="np-btn" @click="pressKey('0')">0</button>
-
-          <!-- Backspace -->
-          <button class="np-btn np-ghost" aria-label="Borrar" @click="erase">
-            <svg width="26" height="20" viewBox="0 0 26 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path
-                d="M10 1H24C24.5523 1 25 1.44772 25 2V18C25 18.5523 24.5523 19 24 19H10L1 10L10 1Z"
-                stroke="white" stroke-opacity="0.65" stroke-width="1.4" stroke-linejoin="round"
-              />
-              <path
-                d="M10.5 7L16.5 13M16.5 7L10.5 13"
-                stroke="white" stroke-opacity="0.65" stroke-width="1.4" stroke-linecap="round"
-              />
-            </svg>
+          <button type="button" class="np-btn" data-pin-key @click="pressKey('0')">0</button>
+          <button type="button" class="np-btn np-ghost" aria-label="Borrar" @click="erase">
+            <Delete :size="21" :stroke-width="1.75" />
           </button>
         </div>
       </div>
     </div>
 
+    </div>
   </div>
 </template>
 
 <style scoped>
-/* ── Numpad button — iOS frosted glass style ──────────────────────────── */
-.np-btn {
-  width: 76px;
-  height: 76px;
+.lock-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  width: 100%;
+  height: 100dvh;
+  min-height: 100svh;
+  overscroll-behavior: none;
+}
+
+.lock-aurora {
+  min-height: 0;
+  color: var(--text-primary);
+  background: var(--background-base);
+  font-family: var(--font-core);
+}
+
+/* ── Clock ─────────────────────────────────────────────────────────── */
+.lock-time__num {
+  font: 600 88px/1 var(--font-core);
+  letter-spacing: -0.03em;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.lock-time__colon {
+  font: 600 88px/1 var(--font-core);
+  color: var(--text-muted);
+  margin: 0 1px;
+}
+.lock-date {
+  font: 400 14px/1.4 var(--font-core);
+  color: var(--text-muted);
+  margin-top: 10px;
+  letter-spacing: 0.01em;
+}
+.lock-wordmark {
+  margin-top: 30px;
+  font: 600 11px/1 var(--font-core);
+  color: var(--text-muted);
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+
+/* ── PIN dots ──────────────────────────────────────────────────────── */
+.lock-dot {
+  width: 13px;
+  height: 13px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.092);
-  border: 1px solid rgba(255, 255, 255, 0.11);
-  color: rgba(255, 255, 255, 0.95);
-  font-size: 28px;
-  font-weight: 300;
-  font-family: inherit;
-  letter-spacing: -0.5px;
+  transition: background var(--dur-fast) var(--ease-calm), border-color var(--dur-fast) var(--ease-calm), transform var(--dur-fast) var(--ease-calm);
+}
+.lock-dot--empty { background: transparent; border: 1.5px solid var(--border-strong); }
+.lock-dot--filled { background: var(--text-primary); border: 1.5px solid var(--text-primary); transform: scale(1.18); }
+.lock-dot--error { background: var(--status-destructive); border: 1.5px solid var(--status-destructive); transform: scale(1.18); }
+.lock-dot--success { background: var(--action-primary); border: 1.5px solid var(--action-primary); transform: scale(1.18); }
+
+.lock-subtitle {
+  font: 400 13px/1.4 var(--font-core);
+  letter-spacing: 0.01em;
+  color: var(--text-muted);
+  transition: color var(--dur-base) var(--ease-calm);
+}
+.lock-subtitle--error { color: var(--status-destructive); }
+
+/* ── Numpad — Aurora glass ─────────────────────────────────────────── */
+.np-btn {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: var(--surface-translucent-fallback);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  font: 500 25px/1 var(--font-core);
+  letter-spacing: -0.01em;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -262,24 +305,24 @@ const KEYS = ['1','2','3','4','5','6','7','8','9']
   touch-action: manipulation;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
-  /* Asymmetric: slow release, fast press via :active override */
-  transition: background var(--duration-base) var(--ease-standard), transform var(--duration-base) var(--ease-standard);
+  transition: background var(--dur-base) var(--ease-calm), border-color var(--dur-fast) var(--ease-calm), transform var(--dur-instant) var(--ease-calm);
+}
+@supports (backdrop-filter: blur(1px)) {
+  .np-btn { background: var(--surface-translucent); backdrop-filter: blur(var(--blur-glass)) saturate(140%); }
 }
 
 .np-btn:active {
-  background: rgba(255, 255, 255, 0.22);
-  transform: scale(0.98);
+  border-color: var(--border-strong);
+  transform: scale(var(--press-scale));
 }
 
-/* Ghost button: delete key */
 .np-ghost {
   background: transparent;
   border-color: transparent;
-  font-size: 20px;
+  color: var(--text-secondary);
 }
-
 .np-ghost:active {
-  background: rgba(255, 255, 255, 0.10);
-  transform: scale(0.98);
+  background: var(--surface-translucent-fallback);
+  border-color: transparent;
 }
 </style>

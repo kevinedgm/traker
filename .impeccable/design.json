@@ -1,0 +1,175 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-24T00:00:00Z",
+  "title": "Design System: Traker",
+  "extensions": {
+    "colorMeta": {
+      "moss-sage": {
+        "role": "primary",
+        "displayName": "Moss Sage",
+        "canonical": "oklch(52% 0.08 142)",
+        "tonalRamp": [
+          "oklch(15% 0.05 142)",
+          "oklch(28% 0.06 142)",
+          "oklch(38% 0.07 142)",
+          "oklch(48% 0.08 142)",
+          "oklch(58% 0.08 142)",
+          "oklch(70% 0.07 142)",
+          "oklch(85% 0.05 142)",
+          "oklch(95% 0.02 142)"
+        ]
+      },
+      "reactor-lime": {
+        "role": "primary",
+        "displayName": "Reactor Lime",
+        "canonical": "oklch(93% 0.25 122)",
+        "tonalRamp": [
+          "oklch(15% 0.05 122)",
+          "oklch(28% 0.10 122)",
+          "oklch(40% 0.15 122)",
+          "oklch(55% 0.20 122)",
+          "oklch(68% 0.23 122)",
+          "oklch(80% 0.25 122)",
+          "oklch(88% 0.25 122)",
+          "oklch(95% 0.18 122)"
+        ]
+      },
+      "info": {
+        "role": "info",
+        "displayName": "Muted Teal",
+        "canonical": "oklch(48% 0.06 220)",
+        "tonalRamp": [
+          "oklch(15% 0.03 220)",
+          "oklch(28% 0.04 220)",
+          "oklch(38% 0.05 220)",
+          "oklch(48% 0.06 220)",
+          "oklch(58% 0.06 220)",
+          "oklch(70% 0.05 220)",
+          "oklch(85% 0.03 220)",
+          "oklch(95% 0.01 220)"
+        ]
+      },
+      "danger": {
+        "role": "danger",
+        "displayName": "Clay Red",
+        "canonical": "oklch(56% 0.13 25)",
+        "tonalRamp": [
+          "oklch(15% 0.06 25)",
+          "oklch(28% 0.08 25)",
+          "oklch(38% 0.10 25)",
+          "oklch(48% 0.12 25)",
+          "oklch(56% 0.13 25)",
+          "oklch(70% 0.10 25)",
+          "oklch(85% 0.06 25)",
+          "oklch(95% 0.02 25)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "Page titles on Dashboard and Settings." },
+      "title": { "displayName": "Title", "purpose": "Card and section headers." },
+      "body": { "displayName": "Body", "purpose": "Default UI copy; kept short by design." },
+      "label": { "displayName": "Label", "purpose": "Uppercase section kickers and form field labels." }
+    },
+    "shadows": [
+      { "name": "hairline", "value": "0 0 0 1px var(--color-border)", "purpose": "Default depth cue for nearly every surface; the system's primary signal, not shadow." },
+      { "name": "soft", "value": "var(--shadow-soft)", "purpose": "Subtle lift for elevated cards (.card-elevated)." },
+      { "name": "float", "value": "var(--shadow-float)", "purpose": "Sheets, popovers, and anything genuinely overlaying the page." },
+      { "name": "hover-glow", "value": "var(--shadow-hover-glow)", "purpose": "Soft accent-colored halo on hover for interactive elevated surfaces." }
+    ],
+    "motion": [
+      { "name": "duration-fast", "value": "120ms", "purpose": "Press/tap feedback." },
+      { "name": "duration-base", "value": "180ms", "purpose": "Default state transitions (hover, color, background)." },
+      { "name": "duration-slow", "value": "320ms", "purpose": "Sheets and larger surface transitions." },
+      { "name": "ease-standard", "value": "cubic-bezier(0.2, 0.8, 0.2, 1)", "purpose": "Default easing for state transitions." },
+      { "name": "ease-emphasis", "value": "cubic-bezier(0.32, 0.72, 0, 1)", "purpose": "Sheets and slide-up transitions; more emphatic settle." }
+    ],
+    "breakpoints": [
+      { "name": "xs", "value": "480px" },
+      { "name": "md", "value": "768px" },
+      { "name": "lg", "value": "1024px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The system's single filled action. Room accent fill, contrasting text, soft accent-tinted glow.",
+      "html": "<button class=\"ds-btn-primary\">Guardar</button>",
+      "css": ".ds-btn-primary { min-height: 44px; padding: 0 17px; border: 0; border-radius: var(--radius-lg, 12px); background: var(--color-brand); color: var(--color-brand-contrast); font-weight: 750; font-size: 0.875rem; display: inline-flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer; box-shadow: 0 8px 22px var(--primary-glow); transition: transform 120ms ease-out, background 180ms cubic-bezier(0.2,0.8,0.2,1); } .ds-btn-primary:hover { filter: brightness(1.04); } .ds-btn-primary:active { transform: scale(0.985); } .ds-btn-primary:focus-visible { outline: 2px solid var(--color-brand); outline-offset: 3px; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Equal-height sibling to primary; raised surface fill with a hairline border, not a de-emphasized ghost.",
+      "html": "<button class=\"ds-btn-secondary\">Cancelar</button>",
+      "css": ".ds-btn-secondary { min-height: 44px; padding: 0 17px; border: 1px solid var(--color-border); border-radius: var(--radius-lg, 12px); background: var(--color-surface-raised); color: var(--color-text); font-weight: 750; font-size: 0.875rem; cursor: pointer; transition: transform 120ms ease-out, border-color 180ms cubic-bezier(0.2,0.8,0.2,1); } .ds-btn-secondary:hover { border-color: var(--color-border-strong); } .ds-btn-secondary:active { transform: scale(0.985); } .ds-btn-secondary:focus-visible { outline: 2px solid var(--color-brand); outline-offset: 3px; }"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Transparent, muted text; for tertiary or dismissive actions only.",
+      "html": "<button class=\"ds-btn-ghost\">Omitir</button>",
+      "css": ".ds-btn-ghost { min-height: 44px; padding: 0 17px; border: 0; background: transparent; color: var(--color-text-muted); font-weight: 750; font-size: 0.875rem; cursor: pointer; transition: color 180ms cubic-bezier(0.2,0.8,0.2,1); } .ds-btn-ghost:hover { color: var(--color-text); } .ds-btn-ghost:focus-visible { outline: 2px solid var(--color-brand); outline-offset: 3px; }"
+    },
+    {
+      "name": "Input Field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Hairline-bordered raised field with an uppercase tracked label above it.",
+      "html": "<label class=\"ds-field\"><span class=\"ds-label\">Nombre</span><input class=\"ds-input\" placeholder=\"Escribe aquí\" /></label>",
+      "css": ".ds-field { display: grid; gap: 7px; } .ds-label { font-size: 0.75rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-text); } .ds-input { width: 100%; min-height: 46px; padding: 10px 12px; border: 1px solid var(--color-border-strong); border-radius: var(--radius-md, 10px); background: var(--color-surface-raised); color: var(--color-text); font-size: 0.875rem; } .ds-input:focus-visible { outline: 2px solid var(--color-brand); outline-offset: 3px; }"
+    },
+    {
+      "name": "Elevated Card",
+      "kind": "card",
+      "refersTo": "card-elevated",
+      "description": "Flat surface with a soft lift; hairline border stays the primary depth cue, shadow is secondary.",
+      "html": "<section class=\"ds-card\"><h3 class=\"ds-card__title\">Racha semanal</h3><p class=\"ds-card__body\">4 de 7 días con avance.</p></section>",
+      "css": ".ds-card { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-xl, 16px); padding: 16px; box-shadow: var(--shadow-soft); } .ds-card__title { margin: 0 0 6px; font-size: 1rem; font-weight: 600; color: var(--color-text); } .ds-card__body { margin: 0; font-size: 0.875rem; color: var(--color-text-muted); }"
+    },
+    {
+      "name": "Contribution Cell",
+      "kind": "custom",
+      "refersTo": "contribution-cell",
+      "description": "The product's signature element: one grid cell whose fill is color-mixed from that habit's own hex at a level-specific percentage. Shown here at level 3 (excelente) with a sample habit color.",
+      "html": "<div class=\"ds-cell ds-cell--today\" style=\"--hc:#8bc34a\">14</div>",
+      "css": ".ds-cell { width: 56px; aspect-ratio: 1; display: grid; place-items: center; border-radius: 10px; border: 1px solid rgba(255,255,255,0.04); background: var(--hc); box-shadow: 0 0 10px color-mix(in srgb, var(--hc) 45%, transparent); font-size: 16px; font-weight: 500; font-variant-numeric: tabular-nums; color: color-mix(in srgb, var(--hc) 20%, #0B0D10); transition: all 180ms cubic-bezier(0.2,0.8,0.2,1); } .ds-cell--today { border: 2px solid var(--hc); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Quiet Companion",
+    "overview": "Traker never raises its voice. It sits beside you as you start, stall, and come back — never as a coach with a clipboard, never as a dashboard keeping score. The system is calm, quietly premium, and restrained: hairline borders instead of loud dividers, one accent color instead of a palette of alerts, silence as the default state and color as something earned. At the same time it is tactile and native-app in feel — a personal, high-focus tool, closer to a well-made mobile app or Linear than to a corporate admin panel. GitHub's Contributions grid is the closest visual cousin: a compact, silent, personally-colored field of small honest marks, not a chart trying to impress anyone.\n\nThe Quiet Companion lives in two rooms, chosen deliberately, not ranked: a daylight room (warm sage-and-cream, :root default, no override needed) and a night room (near-black graphite with a single lime accent, applied via .dark). Neither is the \"real\" Traker with the other as a fallback — they are the same calm presence at two times of day, switched by the user's theme setting (light / dark / system, defaulting to system). Every component must be authored against the semantic CSS custom properties (--color-*, --radius-*, --shadow-*), never against a literal hex, so it inherits both rooms for free.",
+    "keyCharacteristics": [
+      "Two first-class themes, one semantic token layer — never hardcode a hex that only works in one room.",
+      "Hairline borders and flat surfaces at rest; the accent color and glow are earned by state (active, selected, today), not decoration.",
+      "The per-habit contribution grid is the emotional center of the product — compact, tactile, personally colored.",
+      "Short, human, unhurried copy; density stays low so no screen asks for more than one decision at a time."
+    ],
+    "rules": [
+      { "name": "The One Accent Rule", "body": "Each room has exactly one saturated color (Moss Sage or Reactor Lime). It marks primary actions, selection, progress fill, and the \"today\" ring — never body text, never a decorative fill, never more than roughly one element's worth of attention per screen.", "section": "colors" },
+      { "name": "The Border-Over-Shadow Rule", "body": "Depth is read from the hairline border first. Shadow is a second-order signal reserved for genuinely floating elements.", "section": "colors" },
+      { "name": "The One-Family Rule", "body": "Every weight and case variation comes from Inter. Do not introduce a second typeface without updating this file first.", "section": "typography" },
+      { "name": "The Never-Full-Width Rule", "body": "Content never stretches edge-to-edge on desktop, even inside a card-heavy page. A generous max-width and centered column are the default, always.", "section": "layout" },
+      { "name": "The Earned-Glow Rule", "body": "A visible accent-colored glow is reserved for active, selected, or \"today\" state — never a resting decoration.", "section": "elevation" },
+      { "name": "The Never-Nested Rule", "body": "Never place a .card inside another .card's padding — group with spacing and dividers instead.", "section": "components" }
+    ],
+    "dos": [
+      "Do author every color, radius, and shadow against the semantic CSS custom properties (--color-*, --radius-*, --shadow-*) so components work in both rooms automatically.",
+      "Do keep the accent color rare — selection, primary action, progress, and the \"today\" ring only.",
+      "Do treat the hairline border as the primary depth cue; reach for shadow only for elements that are genuinely floating above the page.",
+      "Do derive any new per-item color logic (tags, categories, areas) the way the contribution grid does: color-mix() against the semantic surface tokens from a single source hex, not a hardcoded palette.",
+      "Do keep copy short, calm, and specific — one decision per screen."
+    ],
+    "donts": [
+      "Don't hardcode a literal hex or Tailwind gray-*/slate-*/neon-*/cyber-* class in new components — those Tailwind palette extensions are unused legacy.",
+      "Don't use red, alarm styling, or urgent motion for routine lateness, a missed day, or a broken streak.",
+      "Don't stack a .card inside another .card's padding.",
+      "Don't stretch primary content to full width on desktop, even for data-dense screens.",
+      "Don't treat --shadow-glow, --color-warning, --radius-cell, --font-mono, .card-interactive, .btn-danger, or .ds-label as reliable styled tokens without checking src/assets/main.css first — none of them are actually declared."
+    ]
+  }
+}

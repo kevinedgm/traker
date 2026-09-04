@@ -1,0 +1,40 @@
+name: Verify Traker locally
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run test:bundle
+      - run: npm run test:pwa
+      - run: npm run staging:preflight
+
+  database:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx supabase start --exclude edge-runtime,studio
+      - run: npx supabase migration list --local
+      - run: npx supabase test db --local
+      - run: npx supabase db advisors --local --type all --level warn --fail-on error
+      - if: always()
+        run: npx supabase stop
+

@@ -1,0 +1,3 @@
+<script setup>import AuroraModal from './AuroraModal.vue';defineProps({open:Boolean,title:String});defineEmits(['close'])</script>
+<template><AuroraModal sheet :open="open" :title="title" @close="$emit('close')"><span class="a-sheet__handle"/><slot/><template #footer><slot name="footer"/></template></AuroraModal></template>
+<style>.a-sheet .a-modal{position:absolute!important;bottom:0;max-width:none!important;border-radius:var(--radius-2xl) var(--radius-2xl) 0 0!important}.a-sheet__handle{display:block;width:44px;height:4px;margin:0 auto 16px;border-radius:99px;background:var(--border-strong)}</style>

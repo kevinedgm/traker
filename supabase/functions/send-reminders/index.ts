@@ -1,280 +1,423 @@
 /**
- * send-reminders — Supabase Edge Function
+ * Reliable notification worker.
  *
- * Invoked by pg_cron every 10 minutes. For every user with at least one
- * push subscription it checks, in the USER'S timezone, whether any of
- * these fell inside the last 10-minute window:
- *
- *   habit      — habit.reminder_time, weekday allowed, not logged today
- *   morning    — settings.morning_reminder_time (motivational)
- *   inactivity — settings.inactivity_reminder_time, nothing logged today
- *
- * Anti-spam: each (user, kind, ref) is sent at most once per local day,
- * enforced by the sent_reminders unique constraint — safe even if the
- * cron overlaps or retries.
- *
- * Secrets (supabase secrets set …):
- *   VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, CRON_SECRET
- * SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY are injected automatically.
- *
- * Deploy:  supabase functions deploy send-reminders --no-verify-jwt
+ * One cron invocation first plans idempotent jobs, then atomically leases a
+ * bounded batch. Delivery success closes the job; transient failures return it
+ * to the queue with backoff; dead subscriptions are invalidated on 404/410.
  */
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import webpush from 'npm:web-push@3.6.7'
+import { evaluateNotificationPlan, localTimeParts } from '../_shared/notification-planner.js'
+import { deliveryFailureDecision } from '../_shared/notification-worker.js'
+import { actionsForNotification } from '../_shared/notification-actions.js'
 
 const WINDOW_MINUTES = 10
+const LOOKBACK_ISO = new Date(Date.now() - 32 * 86_400_000).toISOString()
+const LOOKBACK_DATE = LOOKBACK_ISO.slice(0, 10)
 
 const supabase = createClient(
   Deno.env.get('SUPABASE_URL')!,
   Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
 )
 
-webpush.setVapidDetails(
-  'mailto:kevinedgm@gmail.com',
-  Deno.env.get('VAPID_PUBLIC_KEY')!,
-  Deno.env.get('VAPID_PRIVATE_KEY')!,
-)
+let webPushConfigured = false
 
-// ── Timezone helpers ────────────────────────────────────────────────────────
-
-const WEEKDAYS: Record<string, number> = {
-  Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6,
+function configureWebPush() {
+  if (webPushConfigured) return true
+  const publicKey = Deno.env.get('VAPID_PUBLIC_KEY')
+  const privateKey = Deno.env.get('VAPID_PRIVATE_KEY')
+  if (!publicKey || !privateKey) return false
+  webpush.setVapidDetails('mailto:kevinedgm@gmail.com', publicKey, privateKey)
+  webPushConfigured = true
+  return true
 }
 
-/** Local date parts for `date` in IANA timezone `tz`. */
-function localParts(tz: string, date = new Date()) {
-  const fmt = new Intl.DateTimeFormat('en-US', {
-    timeZone: tz, hourCycle: 'h23',
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', weekday: 'short',
-  })
-  const p = Object.fromEntries(fmt.formatToParts(date).map(x => [x.type, x.value]))
-  return {
-    dateStr: `${p.year}-${p.month}-${p.day}`,            // YYYY-MM-DD local
-    minutes: Number(p.hour) * 60 + Number(p.minute),      // minutes since local midnight
-    weekday: WEEKDAYS[p.weekday] ?? 0,                    // 0=Sun … 6=Sat
-  }
-}
+type JsonRecord = Record<string, unknown>
 
-/** "HH:MM" → minutes since midnight, or null if malformed. */
-function hhmmToMinutes(hhmm: unknown): number | null {
-  if (typeof hhmm !== 'string' || !/^\d{2}:\d{2}$/.test(hhmm)) return null
-  const [h, m] = hhmm.split(':').map(Number)
-  return h * 60 + m
-}
-
-/** True if `target` fell inside (now - WINDOW, now]. No midnight wrap: a
- *  reminder in the last minutes of the day still matches before midnight. */
-function isDue(target: number | null, nowMin: number): boolean {
-  if (target === null) return false
-  const diff = nowMin - target
-  return diff >= 0 && diff < WINDOW_MINUTES
-}
-
-/** Whole local days between two YYYY-MM-DD strings. */
-function daysBetween(fromDateStr: string, toDateStr: string): number {
-  const [fy, fm, fd] = fromDateStr.split('-').map(Number)
-  const [ty, tm, td] = toDateStr.split('-').map(Number)
-  return Math.round((Date.UTC(ty, tm - 1, td) - Date.UTC(fy, fm - 1, fd)) / 86_400_000)
-}
-
-// ── Copy (same non-punishing tone as the app) ──────────────────────────────
-
-const MORNING_MESSAGES = [
-  'Buen día. Hoy también cuenta un paso pequeño.',
-  'Empieza suave: un registro basta para tomar impulso.',
-  'No tienes que hacerlo perfecto, solo empezar hoy.',
-  'Hazlo fácil para tu yo de esta mañana: un paso y seguimos.',
-]
-
-// ── Push sending ────────────────────────────────────────────────────────────
-
-interface Sub {
+interface SubscriptionRow {
   id: string
   user_id: string
+  device_id: string | null
   endpoint: string
   p256dh: string
   auth: string
+  invalidated_at: string | null
 }
 
-interface Payload {
-  title: string
-  body: string
-  tag: string
-  data: { url: string }
+interface PreferenceRow {
+  user_id: string
+  device_id: string | null
+  morning_enabled: boolean
+  habit_enabled: boolean
+  closing_enabled: boolean
+  return_enabled: boolean
+  morning_time: string
+  closing_time: string
+  quiet_start: string
+  quiet_end: string
+  timezone: string
+  daily_budget: number
+  lock_screen_privacy: string
+  silenced_until: string | null
+  direct_actions_enabled: boolean
 }
-
-async function sendToUser(subs: Sub[], payload: Payload): Promise<number> {
-  let delivered = 0
-  await Promise.all(subs.map(async (sub) => {
-    try {
-      await webpush.sendNotification(
-        { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
-        JSON.stringify(payload),
-      )
-      delivered++
-    } catch (err) {
-      const status = (err as { statusCode?: number })?.statusCode
-      // 404/410 = endpoint dead (app uninstalled, permission revoked)
-      if (status === 404 || status === 410) {
-        await supabase.from('push_subscriptions').delete().eq('id', sub.id)
-      } else {
-        console.warn(`[push] send failed (${status}):`, (err as Error)?.message)
-      }
-    }
-  }))
-  return delivered
-}
-
-/** Claim a (user, kind, ref, day) slot. True = we own it, send the push. */
-async function claim(userId: string, kind: string, ref: string, sentOn: string): Promise<boolean> {
-  const { error } = await supabase
-    .from('sent_reminders')
-    .insert({ user_id: userId, kind, ref, sent_on: sentOn })
-  if (!error) return true
-  if (error.code === '23505') return false   // unique violation — already sent today
-  console.warn('[claim] unexpected error:', error.message)
-  return false
-}
-
-// ── Row shapes (Supabase has no generated types here) ───────────────────────
 
 interface HabitRow {
   id: string
   user_id: string
-  title: string
-  icon: string | null
-  total_days: number | null
   reminder_time: string | null
-  reminder_days: number[] | null
   created_at: string
+  total_days: number | null
+  is_active: boolean
 }
 
-interface SettingsRow {
+interface ScheduleRow {
+  habit_id: string
+  kind: 'weekdays' | 'times_per_week' | 'times_per_month' | 'every_n_days' | 'window'
+  timezone: string
+  days_of_week: number[] | null
+  interval_days: number | null
+  period_minimum: number | null
+  window_start: string | null
+  window_end: string | null
+  effective_from: string
+  effective_to: string | null
+  is_active: boolean
+}
+
+interface LogRow {
   user_id: string
-  notifications_enabled: boolean | null
-  timezone: string | null
-  morning_reminder_enabled: boolean | null
-  morning_reminder_time: string | null
-  inactivity_reminder_enabled: boolean | null
-  inactivity_reminder_time: string | null
+  habit_id: string
+  local_date: string
+  status: 'not_done' | 'partial' | 'done' | 'conscious_skip'
+  occurred_at: string
 }
 
-// ── Main ────────────────────────────────────────────────────────────────────
+interface JobRow {
+  id: string
+  user_id: string
+  kind: string
+  payload: JsonRecord
+  scheduled_at: string
+  expires_at: string
+  attempt_count: number
+}
 
-Deno.serve(async (req) => {
-  // pg_cron authenticates with a shared secret, not a user JWT
-  const auth = req.headers.get('authorization') ?? ''
-  if (auth !== `Bearer ${Deno.env.get('CRON_SECRET')}`) {
-    return new Response('Unauthorized', { status: 401 })
+function dateDistance(from: string, to: string) {
+  const [fy, fm, fd] = from.split('-').map(Number)
+  const [ty, tm, td] = to.split('-').map(Number)
+  return Math.floor((Date.UTC(ty, tm - 1, td) - Date.UTC(fy, fm - 1, fd)) / 86_400_000)
+}
+
+function weekday(localDate: string) {
+  return new Date(`${localDate}T12:00:00.000Z`).getUTCDay()
+}
+
+function periodStart(localDate: string, kind: ScheduleRow['kind']) {
+  if (kind === 'times_per_month') return `${localDate.slice(0, 8)}01`
+  const offset = (weekday(localDate) + 6) % 7
+  return new Date(Date.parse(`${localDate}T12:00:00.000Z`) - offset * 86_400_000).toISOString().slice(0, 10)
+}
+
+function isScheduled(habit: HabitRow, schedule: ScheduleRow | undefined, localDate: string, logs: LogRow[]) {
+  if (!schedule || schedule.is_active === false) return false
+  if (localDate < schedule.effective_from) return false
+  if (schedule.effective_to && localDate > schedule.effective_to) return false
+  if (schedule.kind === 'weekdays' && !schedule.days_of_week?.includes(weekday(localDate))) return false
+  if (schedule.kind === 'every_n_days' && dateDistance(schedule.effective_from, localDate) % Math.max(1, Number(schedule.interval_days ?? 1)) !== 0) return false
+  if (schedule.kind === 'times_per_week' || schedule.kind === 'times_per_month') {
+    const registeredToday = logs.some(log => log.habit_id === habit.id && log.local_date === localDate)
+    const start = [periodStart(localDate, schedule.kind), schedule.effective_from].sort().at(-1)!
+    const built = new Set(logs
+      .filter(log => log.habit_id === habit.id && log.local_date >= start && log.local_date <= localDate && ['partial', 'done'].includes(log.status))
+      .map(log => log.local_date)).size
+    if (!registeredToday && built >= Math.max(1, Number(schedule.period_minimum ?? 1))) return false
   }
+  const createdDate = localTimeParts(new Date(habit.created_at), schedule?.timezone).localDate
+  const day = dateDistance(createdDate, localDate) + 1
+  return day >= 1 && day <= Math.max(1, Number(habit.total_days ?? 1))
+}
 
-  const { data: allSubs, error: subsErr } = await supabase
+function preferenceFor(subscription: SubscriptionRow, rows: PreferenceRow[]) {
+  return rows.find(row => row.user_id === subscription.user_id && row.device_id === subscription.device_id)
+    ?? rows.find(row => row.user_id === subscription.user_id && row.device_id === null)
+    ?? null
+}
+
+function plannerSettings(preference: PreferenceRow | null, enabled: boolean) {
+  return {
+    enabled,
+    morning_enabled: preference?.morning_enabled ?? true,
+    habit_enabled: preference?.habit_enabled ?? true,
+    closing_enabled: preference?.closing_enabled ?? true,
+    return_enabled: preference?.return_enabled ?? true,
+    morning_time: preference?.morning_time ?? '08:00',
+    closing_time: preference?.closing_time ?? '20:00',
+    quiet_start: preference?.quiet_start ?? '21:30',
+    quiet_end: preference?.quiet_end ?? '07:30',
+    daily_budget: preference?.daily_budget ?? 2,
+    silenced_until: preference?.silenced_until ?? null,
+    lock_screen_privacy: preference?.lock_screen_privacy ?? 'generic',
+  }
+}
+
+async function loadPlanningData() {
+  const { data: subscriptions, error } = await supabase
     .from('push_subscriptions')
-    .select('id, user_id, endpoint, p256dh, auth')
-  if (subsErr) return new Response(subsErr.message, { status: 500 })
-  if (!allSubs?.length) return Response.json({ ok: true, sent: 0, reason: 'no subscriptions' })
+    .select('id, user_id, device_id, endpoint, p256dh, auth, invalidated_at')
+    .is('invalidated_at', null)
+  if (error) throw error
+  const subs = (subscriptions ?? []) as SubscriptionRow[]
+  if (!subs.length) return { subs, preferences: [], legacySettings: [], habits: [], schedules: [], logs: [], closures: [], jobs: [], latestActivity: [] }
 
-  const userIds = [...new Set(allSubs.map(s => s.user_id))]
-
-  const [{ data: allSettings }, { data: allHabits }] = await Promise.all([
-    supabase.from('settings').select('*').in('user_id', userIds),
-    supabase.from('habits').select('*').in('user_id', userIds).eq('is_active', true),
+  const userIds = [...new Set(subs.map(row => row.user_id))]
+  const [preferences, legacySettings, habits, schedules, logs, closures, jobs, latestActivity] = await Promise.all([
+    supabase.from('traker_notification_preferences').select('*').in('user_id', userIds),
+    supabase.from('settings').select('user_id, notifications_enabled, timezone').in('user_id', userIds),
+    supabase.from('habits').select('id, user_id, reminder_time, created_at, total_days, is_active').in('user_id', userIds).eq('is_active', true),
+    supabase.from('traker_habit_schedules').select('habit_id, kind, timezone, days_of_week, interval_days, period_minimum, window_start, window_end, effective_from, effective_to, is_active').in('user_id', userIds).is('deleted_at', null).eq('is_active', true),
+    supabase.from('traker_habit_logs').select('user_id, habit_id, local_date, status, occurred_at').in('user_id', userIds).is('deleted_at', null).gte('local_date', LOOKBACK_DATE),
+    supabase.from('traker_day_closures').select('user_id, local_date, status').in('user_id', userIds).gte('local_date', LOOKBACK_ISO.slice(0, 10)),
+    supabase.from('traker_notification_jobs').select('user_id, kind, job_key, status, scheduled_at, payload').in('user_id', userIds).eq('status', 'completed').gte('scheduled_at', LOOKBACK_ISO),
+    supabase.rpc('traker_latest_habit_activity', { p_user_ids: userIds }),
   ])
 
-  let sent = 0
+  for (const result of [preferences, legacySettings, habits, schedules, logs, closures, jobs, latestActivity]) {
+    if (result.error) throw result.error
+  }
+  return {
+    subs,
+    preferences: (preferences.data ?? []) as PreferenceRow[],
+    legacySettings: legacySettings.data ?? [],
+    habits: (habits.data ?? []) as HabitRow[],
+    schedules: (schedules.data ?? []) as ScheduleRow[],
+    logs: (logs.data ?? []) as LogRow[],
+    closures: closures.data ?? [],
+    jobs: jobs.data ?? [],
+    latestActivity: latestActivity.data ?? [],
+  }
+}
 
-  const settingsRows = (allSettings ?? []) as SettingsRow[]
-  const habitRows    = (allHabits  ?? []) as HabitRow[]
+async function planJobs(now: Date) {
+  const data = await loadPlanningData()
+  const rows: JsonRecord[] = []
 
-  for (const userId of userIds) {
-    const subs     = allSubs.filter(s => s.user_id === userId)
-    const settings = settingsRows.find(s => s.user_id === userId) ?? null
-    const habits   = habitRows.filter(h => h.user_id === userId)
-
-    // User explicitly turned reminders off → respect it
-    if (settings && settings.notifications_enabled === false) continue
-
-    const tz  = settings?.timezone || 'America/Mexico_City'
-    let now
-    try { now = localParts(tz) } catch { now = localParts('America/Mexico_City') }
-
-    // ── Which habits are due / logged today? ──────────────────────────
-    type DueHabit = { habit: HabitRow, dayNumber: number }
-    const dueHabits: DueHabit[] = []
-    const todayDayByHabit = new Map<string, number>()
-
-    for (const habit of habits) {
-      const createdLocal = localParts(tz, new Date(habit.created_at))
-      const dayNumber = daysBetween(createdLocal.dateStr, now.dateStr) + 1
-      if (dayNumber < 1 || dayNumber > Number(habit.total_days ?? 1)) continue
-      todayDayByHabit.set(habit.id, dayNumber)
-
-      if (!isDue(hhmmToMinutes(habit.reminder_time), now.minutes)) continue
-      const days = habit.reminder_days
-      if (Array.isArray(days) && days.length > 0 && !days.includes(now.weekday)) continue
-      dueHabits.push({ habit, dayNumber })
-    }
-
-    // ── What's already logged today? (one query per user) ─────────────
-    const loggedToday = new Set<string>()
-    if (todayDayByHabit.size) {
-      const { data: entries } = await supabase
-        .from('habit_entries')
-        .select('habit_id, day_number')
-        .in('habit_id', [...todayDayByHabit.keys()])
-      for (const e of entries ?? []) {
-        if (todayDayByHabit.get(e.habit_id as string) === e.day_number) {
-          loggedToday.add(e.habit_id as string)
-        }
-      }
-    }
-
-    // ── 1. Per-habit reminders ─────────────────────────────────────────
-    for (const { habit } of dueHabits) {
-      if (loggedToday.has(habit.id)) continue
-      if (!await claim(userId, 'habit', habit.id, now.dateStr)) continue
-      sent += await sendToUser(subs, {
-        title: `${habit.icon ?? ''} ${habit.title}`.trim(),
-        body:  'Es un buen momento. Una versión mínima también cuenta.',
-        tag:   `habit-${habit.id}`,
-        data:  { url: `/habit/${habit.id}` },
+  for (const subscription of data.subs) {
+    const preference = preferenceFor(subscription, data.preferences)
+    const legacy = data.legacySettings.find(row => row.user_id === subscription.user_id)
+    const timezone = preference?.timezone || legacy?.timezone || 'America/Mexico_City'
+    const localDate = localTimeParts(now, timezone).localDate
+    const userHabits = data.habits.filter(habit => habit.user_id === subscription.user_id)
+    const userLogs = data.logs.filter(log => log.user_id === subscription.user_id)
+    const agenda = userHabits
+      .filter(habit => {
+        const schedule = data.schedules.find(item => item.habit_id === habit.id)
+        return isScheduled(habit, schedule, localDate, userLogs)
       })
-    }
+      .map(habit => ({
+        id: habit.id,
+        reminderTime: habit.reminder_time,
+        registered: userLogs.some(log => log.habit_id === habit.id && log.local_date === localDate),
+      }))
 
-    // ── 2. Morning motivation ──────────────────────────────────────────
-    if (
-      settings?.morning_reminder_enabled &&
-      habits.length > 0 &&
-      isDue(hhmmToMinutes(settings.morning_reminder_time), now.minutes) &&
-      await claim(userId, 'morning', '-', now.dateStr)
-    ) {
-      const idx = new Date().getDate() % MORNING_MESSAGES.length
-      sent += await sendToUser(subs, {
-        title: 'Traker',
-        body:  MORNING_MESSAGES[idx],
-        tag:   'daily-morning-motivation',
-        data:  { url: '/' },
-      })
-    }
-
-    // ── 3. Inactivity (nothing logged today) ───────────────────────────
-    if (
-      settings?.inactivity_reminder_enabled &&
-      habits.length > 0 &&
-      loggedToday.size === 0 &&
-      isDue(hhmmToMinutes(settings.inactivity_reminder_time), now.minutes) &&
-      await claim(userId, 'inactivity', '-', now.dateStr)
-    ) {
-      sent += await sendToUser(subs, {
-        title: 'Traker',
-        body:  'Todavía puedes cerrar el día. Un paso pequeño también cuenta.',
-        tag:   'daily-inactivity-reminder',
-        data:  { url: '/' },
-      })
-    }
+    const latestActivity = new Date(
+      data.latestActivity.find(row => row.user_id === subscription.user_id)?.last_activity ?? 0,
+    ).getTime()
+    const history = data.jobs
+      .filter(job => job.user_id === subscription.user_id && job.payload?.subscription_id === subscription.id)
+      .map(job => ({
+        kind: job.kind,
+        jobKey: String(job.job_key).split(`:${subscription.id}`)[0],
+        at: job.scheduled_at,
+        localDate: job.payload?.local_date,
+        phraseId: job.payload?.phrase_id,
+        copyVersion: job.payload?.copy_version,
+      }))
+    const dayClosure = data.closures.find(row => row.user_id === subscription.user_id && row.local_date === localDate) ?? null
+    const evaluation = evaluateNotificationPlan({
+      now,
+      timezone,
+      agenda,
+      settings: plannerSettings(preference, legacy?.notifications_enabled !== false),
+      history,
+      dayClosure,
+      daysSinceActivity: Number.isFinite(latestActivity) && latestActivity > 0
+        ? Math.floor((now.getTime() - latestActivity) / 86_400_000)
+        : 0,
+      windowMinutes: WINDOW_MINUTES,
+    })
+    const intent = evaluation.intentions[0]
+    if (!intent) continue
+    rows.push({
+      user_id: subscription.user_id,
+      job_key: `${intent.jobKey}:${subscription.id}`,
+      kind: intent.kind,
+      payload: {
+        subscription_id: subscription.id,
+        local_date: evaluation.localDate,
+        title: intent.title,
+        body: intent.body,
+        phrase_id: intent.phraseId,
+        copy_version: intent.copyVersion,
+        copy_hash: intent.copyHash,
+        url: intent.url,
+        reference_ids: intent.referenceIds,
+        direct_actions_enabled: preference?.direct_actions_enabled === true,
+      },
+      scheduled_at: intent.scheduledAt,
+      expires_at: intent.expiresAt,
+      status: 'queued',
+      next_attempt_at: intent.scheduledAt,
+    })
   }
 
-  return Response.json({ ok: true, sent })
+  if (!rows.length) return 0
+  const { error } = await supabase
+    .from('traker_notification_jobs')
+    .upsert(rows, { onConflict: 'user_id,job_key', ignoreDuplicates: true })
+  if (error) throw error
+  return rows.length
+}
+
+async function updateJob(id: string, patch: JsonRecord) {
+  const { error } = await supabase.from('traker_notification_jobs').update(patch).eq('id', id)
+  if (error) throw error
+}
+
+async function deliverJob(job: JobRow) {
+  const subscriptionId = String(job.payload?.subscription_id ?? '')
+  const { data: subscription } = await supabase
+    .from('push_subscriptions')
+    .select('id, user_id, endpoint, p256dh, auth, invalidated_at')
+    .eq('id', subscriptionId)
+    .eq('user_id', job.user_id)
+    .is('invalidated_at', null)
+    .maybeSingle()
+
+  if (!subscription) {
+    await updateJob(job.id, { status: 'suppressed', lease_until: null, suppression_reason: 'no_active_subscription' })
+    return 'suppressed'
+  }
+
+  const attempt = job.attempt_count
+  const delivery = await supabase
+    .from('traker_notification_deliveries')
+    .insert({
+      user_id: job.user_id,
+      job_id: job.id,
+      subscription_id: subscription.id,
+      attempt,
+      status: 'sending',
+    })
+    .select('id')
+    .single()
+  if (delivery.error) throw delivery.error
+
+  try {
+    const referenceIds = Array.isArray(job.payload?.reference_ids)
+      ? job.payload.reference_ids.map(String)
+      : []
+    const actions = actionsForNotification({
+      kind: job.kind,
+      referenceIds,
+      directActionsEnabled: job.payload?.direct_actions_enabled === true,
+    })
+    const habitId = actions.length ? referenceIds[0] : null
+    await webpush.sendNotification(
+      { endpoint: subscription.endpoint, keys: { p256dh: subscription.p256dh, auth: subscription.auth } },
+      JSON.stringify({
+        title: String(job.payload?.title ?? 'Traker'),
+        body: String(job.payload?.body ?? ''),
+        tag: habitId ? `habit-${habitId}` : `traker-${job.kind}`,
+        actions,
+        data: {
+          url: String(job.payload?.url ?? '/'),
+          phraseId: String(job.payload?.phrase_id ?? ''),
+          copyVersion: String(job.payload?.copy_version ?? ''),
+          habitId,
+        },
+      }),
+    )
+    const sentAt = new Date().toISOString()
+    await Promise.all([
+      supabase.from('traker_notification_deliveries').update({ status: 'delivered', sent_at: sentAt }).eq('id', delivery.data.id),
+      supabase.from('push_subscriptions').update({ last_success_at: sentAt, failure_count: 0 }).eq('id', subscription.id),
+      updateJob(job.id, { status: 'completed', lease_until: null, suppression_reason: null }),
+    ])
+    return 'delivered'
+  } catch (error) {
+    const status = Number((error as { statusCode?: number })?.statusCode || 0)
+    const errorCode = status ? `http_${status}` : 'network_error'
+    const decision = deliveryFailureDecision({
+      status,
+      attempt,
+      expiresAt: job.expires_at,
+      now: new Date(),
+    })
+    if (decision.action === 'invalidate') {
+      await Promise.all([
+        supabase.from('traker_notification_deliveries').update({ status: 'invalid_subscription', provider_status: status, error_code: errorCode }).eq('id', delivery.data.id),
+        supabase.from('push_subscriptions').update({ invalidated_at: new Date().toISOString(), failure_count: 1 }).eq('id', subscription.id),
+        updateJob(job.id, { status: 'suppressed', lease_until: null, suppression_reason: 'invalid_subscription' }),
+      ])
+      return 'invalid_subscription'
+    }
+
+    await supabase.from('traker_notification_deliveries')
+      .update({ status: 'failed', provider_status: status || null, error_code: errorCode })
+      .eq('id', delivery.data.id)
+    await supabase.from('push_subscriptions').update({ failure_count: attempt }).eq('id', subscription.id)
+
+    if (decision.action === 'retry') {
+      await updateJob(job.id, {
+        status: 'queued',
+        lease_until: null,
+        next_attempt_at: decision.retryAt,
+        suppression_reason: null,
+      })
+      return 'retrying'
+    }
+    await updateJob(job.id, {
+      status: 'expired',
+      lease_until: null,
+      suppression_reason: decision.reason,
+    })
+    return 'failed'
+  }
+}
+
+Deno.serve(async (request) => {
+  const cronSecret = Deno.env.get('CRON_SECRET')
+  if (!cronSecret) {
+    console.error('[send-reminders] CRON_SECRET is not configured')
+    return Response.json({ ok: false, error: 'worker_not_configured' }, { status: 503 })
+  }
+  const auth = request.headers.get('authorization') ?? ''
+  if (auth !== `Bearer ${cronSecret}`) return new Response('Unauthorized', { status: 401 })
+  if (!configureWebPush()) {
+    console.error('[send-reminders] VAPID keys are not configured')
+    return Response.json({ ok: false, error: 'worker_not_configured' }, { status: 503 })
+  }
+
+  try {
+    const planned = await planJobs(new Date())
+    const { data: claimed, error } = await supabase.rpc('traker_claim_notification_jobs', {
+      p_limit: 25,
+      p_lease_seconds: 120,
+    })
+    if (error) throw error
+    const outcomes = await Promise.all(((claimed ?? []) as JobRow[]).map(deliverJob))
+    return Response.json({
+      ok: true,
+      planned,
+      claimed: outcomes.length,
+      delivered: outcomes.filter(outcome => outcome === 'delivered').length,
+      retrying: outcomes.filter(outcome => outcome === 'retrying').length,
+      invalidated: outcomes.filter(outcome => outcome === 'invalid_subscription').length,
+    })
+  } catch (error) {
+    console.error('[send-reminders]', error)
+    return Response.json({ ok: false, error: (error as Error)?.message ?? 'worker_error' }, { status: 500 })
+  }
 })

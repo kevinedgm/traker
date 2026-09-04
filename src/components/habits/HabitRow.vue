@@ -4,10 +4,12 @@ import { useRouter } from 'vue-router'
 import { Check, ChevronRight } from 'lucide-vue-next'
 import { useHabitsStore } from '@stores/habits'
 import { resolveHabitIcon } from '@utils/icons'
+import { useCopy } from '@/composables/useCopy'
 
 const props  = defineProps({ habit: { type: Object, required: true } })
 const router = useRouter()
 const store  = useHabitsStore()
+const { getPhrase } = useCopy()
 let pressTimer = null
 let pickerTimer = null
 let confirmTimer = null
@@ -16,19 +18,24 @@ const currentDay = computed(() => store.getCurrentDay(props.habit))
 const percent    = computed(() => Math.min(store.getProgress(props.habit), 100))
 const justLogged = ref(false)
 const longPressConsumed = ref(false)
-const todayLogged = computed(() => (props.habit.logs?.[currentDay.value]?.level ?? 0) > 0)
+const todayLogged = computed(() => props.habit.logs?.[currentDay.value] !== undefined)
 
 /* ── One-tap level picker ─────────────────────────── */
 const showPicker = ref(false)
 const confirmMsg = ref('')
 
-// Order matches effort: full → partial → minimal → not today
-const PICK_LEVELS = [
-  { value: 3, label: 'Completo', confirm: '¡Día completo!' },
-  { value: 2, label: 'Bien',     confirm: 'Buen avance ✓' },
-  { value: 1, label: 'Mínimo',   confirm: 'Mínimo hecho — también suma' },
-  { value: 0, label: 'Hoy no',   confirm: 'Anotado. Mañana seguimos.' },
+const PICK_DECISIONS = [
+  { status: 'done', level: 3, label: 'Sí' },
+  { status: 'partial', level: 2, label: 'A medias' },
+  { status: 'not_done', level: 0, label: 'No' },
 ]
+
+/** Which copy-engine event corresponds to a picked level. */
+function confirmEventFor(status) {
+  if (status === 'not_done') return 'habit_skipped'
+  if (status === 'partial') return 'habit_partial'
+  return 'habit_completed'
+}
 
 function togglePicker() {
   showPicker.value = !showPicker.value
@@ -39,10 +46,12 @@ function togglePicker() {
   }
 }
 
-function pickLevel(value) {
+function pickDecision(item) {
   const existing = props.habit.logs?.[currentDay.value] ?? {}
   store.logDay(props.habit.id, currentDay.value, {
-    level: value,
+    status: item.status,
+    minimumUsed: false,
+    contextCodes: existing.contextCodes ?? [],
     emotion: existing.emotion ?? null,
     energy: existing.energy ?? null,
     note: existing.note ?? '',
@@ -51,7 +60,10 @@ function pickLevel(value) {
   window.clearTimeout(pickerTimer)
   showPicker.value = false
 
-  confirmMsg.value = PICK_LEVELS.find(l => l.value === value)?.confirm ?? '✓'
+  const event = confirmEventFor(item.status)
+  confirmMsg.value = event
+    ? getPhrase(event, { habit: props.habit, vars: { habitName: props.habit.name } }).text
+    : 'Registro guardado.'
   justLogged.value = true
   window.clearTimeout(confirmTimer)
   confirmTimer = window.setTimeout(() => {
@@ -68,8 +80,9 @@ const CELLS = 10
 const miniCells = computed(() =>
   Array.from({ length: CELLS }, (_, i) => {
     const day = i + 1
-    if (day > props.habit.duration || day > currentDay.value) return { key: i, level: -1 }
-    return { key: i, level: props.habit.logs?.[day]?.level ?? 0 }
+    if (day > props.habit.duration || day > currentDay.value) return { key: i, level: -1, logged: false }
+    const log = props.habit.logs?.[day]
+    return { key: i, level: log?.level ?? 0, logged: log !== undefined }
   })
 )
 
@@ -92,7 +105,7 @@ function startLongPress() {
   longPressConsumed.value = false
   pressTimer = window.setTimeout(() => {
     longPressConsumed.value = true
-    pickLevel(3)   // power shortcut: long-press = full day
+    pickDecision(PICK_DECISIONS[0])   // power shortcut: long-press = "Sí"
   }, 520)
 }
 
@@ -141,7 +154,9 @@ function clearLongPress() {
 
       <!-- Row 2: days counter + percentage -->
       <div class="hr__row-meta">
-        <span class="hr__days">Día {{ currentDay }} / {{ habit.duration }}</span>
+        <span class="hr__days">
+          {{ habit.minimumVersion ? `Mínimo: ${habit.minimumVersion}` : `Día ${currentDay} / ${habit.duration}` }}
+        </span>
         <span class="hr__pct">{{ percent }}%</span>
       </div>
 
@@ -159,7 +174,7 @@ function clearLongPress() {
           :class="
             cell.level < 0
               ? 'hr__mini-cell--future'
-              : cell.level === 0
+              : !cell.logged
                 ? 'hr__mini-cell--empty'
                 : `hr__mini-cell--lv${cell.level}`
           "
@@ -196,15 +211,15 @@ function clearLongPress() {
         @pointerdown.stop
       >
         <button
-          v-for="lvl in PICK_LEVELS"
-          :key="lvl.value"
+          v-for="item in PICK_DECISIONS"
+          :key="item.status"
           class="hr__pick"
-          :class="`hr__pick--lv${lvl.value}`"
+          :class="`hr__pick--lv${item.level}`"
           type="button"
-          :aria-label="`${lvl.label} — registrar y cerrar`"
-          @click="pickLevel(lvl.value)"
+          :aria-label="`${item.label} — registrar y cerrar`"
+          @click="pickDecision(item)"
         >
-          {{ lvl.label }}
+          {{ item.label }}
         </button>
       </div>
     </Transition>
@@ -352,7 +367,6 @@ function clearLongPress() {
   height: 100%;
   border-radius: inherit;
   background: var(--hc);
-  transition: width 700ms var(--ease-standard);
 }
 
 /* Mini cells */
@@ -383,6 +397,11 @@ function clearLongPress() {
   background: color-mix(in srgb, var(--hc) 28%, var(--color-surface-raised));
 }
 
+.hr__mini-cell--lv0 {
+  background: var(--text-muted);
+  opacity: .5;
+}
+
 .hr__mini-cell--lv2 {
   background: color-mix(in srgb, var(--hc) 65%, var(--color-surface));
 }
@@ -392,8 +411,8 @@ function clearLongPress() {
 }
 
 .hr__mini-cell--lv4 {
-  background: rgba(143, 144, 152, 0.18);
-  box-shadow: inset 0 0 0 1px rgba(143, 144, 152, 0.36);
+  background: var(--progress-skipped);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
 }
 
 /* ── Quick entry ──────────────────────────────────── */

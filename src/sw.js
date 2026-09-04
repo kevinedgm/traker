@@ -12,16 +12,22 @@
  *  4. Handle notification click → focus / open the app
  */
 
-import { precacheAndRoute, cleanupOutdatedCaches } from 'workbox-precaching'
-import { registerRoute } from 'workbox-routing'
-import { NetworkFirst, CacheFirst } from 'workbox-strategies'
+import { cleanupOutdatedCaches, createHandlerBoundToURL, precacheAndRoute } from 'workbox-precaching'
+import { NavigationRoute, registerRoute } from 'workbox-routing'
+import { CacheFirst } from 'workbox-strategies'
 import { ExpirationPlugin } from 'workbox-expiration'
 import { CacheableResponsePlugin } from 'workbox-cacheable-response'
+import { enqueueNotificationAction } from './features/notifications/actionQueue.js'
+import { NOTIFICATION_ACTION_IDS } from '../supabase/functions/_shared/notification-actions.js'
 
 // ── Precache app shell ─────────────────────────────────────────────────────
 // __WB_MANIFEST is injected by vite-plugin-pwa at build time
 precacheAndRoute(self.__WB_MANIFEST)
 cleanupOutdatedCaches()
+
+// Vue Router uses history mode. Serve the precached shell for in-scope
+// navigations so direct routes such as /goals also open while offline.
+registerRoute(new NavigationRoute(createHandlerBoundToURL('index.html')))
 
 // ── Lifecycle: activate immediately ───────────────────────────────────────
 self.skipWaiting()
@@ -86,6 +92,7 @@ self.addEventListener('push', (event) => {
       tag:      payload.tag  ?? 'traker-push',
       renotify: true,
       data:     payload.data ?? {},
+      actions:  Array.isArray(payload.actions) ? payload.actions : [],
     })
   )
 })
@@ -108,16 +115,43 @@ self.addEventListener('pushsubscriptionchange', (event) => {
 })
 
 // ── Notification click: focus the app ────────────────────────────────────
+//
+// Plain click (no action button, or a platform that doesn't support them —
+// e.g. iOS Safari never sends event.action) keeps the old behavior exactly:
+// focus/open the app and navigate to data.url.
+//
+// A click on one of the reminder's action buttons ('done' | 'snooze' |
+// 'skip', see notifications.service.js's HABIT_REMINDER_ACTIONS) instead
+// posts a message to an open client so the app can act on it (mark the
+// habit done/skipped, or reschedule a nudge) — the SW itself has no
+// access to the Pinia stores. If habit-${id} is present in the tag we
+// forward the habit id too.
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
 
   // data.url is app-relative (e.g. '/habit/123'); resolve inside the scope
   const targetUrl = scopeUrl(event.notification.data?.url ?? '')
+  const tagMatch = /^habit-(.+)$/.exec(event.notification.tag ?? '')
+  const habitId = event.notification.data?.habitId ?? (tagMatch ? tagMatch[1] : null)
+  const directAction = NOTIFICATION_ACTION_IDS.includes(event.action) && habitId
+    ? enqueueNotificationAction({ action: event.action, habitId, url: targetUrl })
+    : Promise.resolve(null)
 
   event.waitUntil(
-    self.clients
+    directAction.then(() => self.clients
       .matchAll({ type: 'window', includeUncontrolled: true })
       .then((clientList) => {
+        if (event.action) {
+          for (const client of clientList) {
+            client.postMessage({ type: 'NOTIFICATION_ACTION_QUEUED' })
+          }
+          // Still bring the app to front so the user sees the result.
+          const client = clientList.find(c => 'focus' in c)
+          if (client) return client.focus()
+          if (self.clients.openWindow) return self.clients.openWindow(targetUrl)
+          return undefined
+        }
+
         // If a tab is already open, focus it and navigate
         for (const client of clientList) {
           if ('focus' in client) {
@@ -129,6 +163,7 @@ self.addEventListener('notificationclick', (event) => {
         // Otherwise open a new window
         if (self.clients.openWindow) return self.clients.openWindow(targetUrl)
       })
+    )
   )
 })
 
@@ -141,19 +176,6 @@ registerRoute(
     cacheName: 'google-fonts',
     plugins: [
       new ExpirationPlugin({ maxEntries: 20, maxAgeSeconds: 60 * 60 * 24 * 365 }),
-      new CacheableResponsePlugin({ statuses: [0, 200] }),
-    ],
-  })
-)
-
-// Supabase REST API — network-first, short TTL fallback
-registerRoute(
-  /^https:\/\/.*\.supabase\.co\/rest\/.*/i,
-  new NetworkFirst({
-    cacheName: 'supabase-api',
-    networkTimeoutSeconds: 5,
-    plugins: [
-      new ExpirationPlugin({ maxEntries: 50, maxAgeSeconds: 60 * 5 }),
       new CacheableResponsePlugin({ statuses: [0, 200] }),
     ],
   })

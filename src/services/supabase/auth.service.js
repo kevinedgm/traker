@@ -94,6 +94,45 @@ export async function signOut() {
   return { error }
 }
 
+// ── Delete account ────────────────────────────────────────────────────────
+
+async function functionError(error, fallbackCode = 'ACCOUNT_DELETE_FAILED') {
+  let code = fallbackCode
+  try {
+    const payload = await error?.context?.clone?.().json()
+    if (typeof payload?.code === 'string') code = payload.code
+  } catch {
+    // A network or gateway error may not include a JSON response.
+  }
+  const normalized = new Error(code)
+  normalized.code = code
+  normalized.cause = error
+  return normalized
+}
+
+/**
+ * Permanently deletes the currently authenticated account through the
+ * server-side Edge Function. No owner id is accepted from the browser.
+ */
+export async function deleteCloudAccount(confirmation) {
+  if (!supabase) {
+    const error = new Error('SUPABASE_DISABLED')
+    error.code = 'SUPABASE_DISABLED'
+    return { data: null, error }
+  }
+
+  const { data, error } = await supabase.functions.invoke('delete-account', {
+    body: { confirmation },
+  })
+  if (error) return { data: null, error: await functionError(error, data?.code) }
+  if (data?.code !== 'ACCOUNT_DELETED') {
+    const unexpected = new Error(data?.code || 'ACCOUNT_DELETE_FAILED')
+    unexpected.code = data?.code || 'ACCOUNT_DELETE_FAILED'
+    return { data, error: unexpected }
+  }
+  return { data, error: null }
+}
+
 // ── Current user ───────────────────────────────────────────────────────────
 
 /**

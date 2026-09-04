@@ -20,8 +20,15 @@
 
 import { supabase, isSupabaseEnabled } from './supabase/client.js'
 import { getUser } from './supabase/auth.service.js'
+import { notificationDeviceId } from './supabase/settings.service.js'
+import { storage } from '@services/storage'
 
 const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY ?? ''
+
+function publishPushState(active) {
+  storage.write(storage.KEYS.PUSH_ACTIVE, Boolean(active))
+  window.dispatchEvent(new CustomEvent('traker:push-state', { detail: { active: Boolean(active) } }))
+}
 
 /** True when the stack needed for Web Push exists in this browser. */
 export function isPushSupported() {
@@ -50,13 +57,13 @@ function urlBase64ToUint8Array(base64String) {
  *         | 'subscribe-failed' | 'save-failed'
  */
 export async function ensurePushSubscription() {
-  if (!isPushSupported())  return { ok: false, reason: 'unsupported' }
-  if (!isSupabaseEnabled)  return { ok: false, reason: 'no-session' }
-  if (!VAPID_PUBLIC_KEY)   return { ok: false, reason: 'no-vapid-key' }
-  if (Notification.permission !== 'granted') return { ok: false, reason: 'permission' }
+  if (!isPushSupported())  { publishPushState(false); return { ok: false, reason: 'unsupported' } }
+  if (!isSupabaseEnabled)  { publishPushState(false); return { ok: false, reason: 'no-session' } }
+  if (!VAPID_PUBLIC_KEY)   { publishPushState(false); return { ok: false, reason: 'no-vapid-key' } }
+  if (Notification.permission !== 'granted') { publishPushState(false); return { ok: false, reason: 'permission' } }
 
   const user = await getUser()
-  if (!user) return { ok: false, reason: 'no-session' }
+  if (!user) { publishPushState(false); return { ok: false, reason: 'no-session' } }
 
   let subscription
   try {
@@ -71,6 +78,7 @@ export async function ensurePushSubscription() {
     }
   } catch (err) {
     console.warn('[push] subscribe failed:', err?.message)
+    publishPushState(false)
     return { ok: false, reason: 'subscribe-failed' }
   }
 
@@ -84,6 +92,12 @@ export async function ensurePushSubscription() {
         p256dh:       json.keys?.p256dh ?? '',
         auth:         json.keys?.auth   ?? '',
         user_agent:   navigator.userAgent.slice(0, 255),
+        device_id:    notificationDeviceId(),
+        capabilities: {
+          actions: false,
+          displayMode: window.matchMedia?.('(display-mode: standalone)')?.matches ? 'standalone' : 'browser',
+        },
+        invalidated_at: null,
         last_used_at: new Date().toISOString(),
       },
       { onConflict: 'endpoint' },
@@ -91,9 +105,11 @@ export async function ensurePushSubscription() {
 
   if (error) {
     console.warn('[push] saving subscription failed:', error.message)
+    publishPushState(false)
     return { ok: false, reason: 'save-failed' }
   }
 
+  publishPushState(true)
   console.info('[push] Subscription active ✓')
   return { ok: true }
 }
@@ -103,18 +119,25 @@ export async function ensurePushSubscription() {
  * Used when the user signs out or disables reminders.
  */
 export async function removePushSubscription() {
-  if (!isPushSupported()) return
+  if (!isPushSupported()) return { ok: true }
 
   try {
     const registration = await navigator.serviceWorker.ready
     const subscription = await registration.pushManager.getSubscription()
-    if (!subscription) return
+    if (!subscription) {
+      publishPushState(false)
+      return { ok: true }
+    }
 
     if (isSupabaseEnabled) {
-      await supabase.from('push_subscriptions').delete().eq('endpoint', subscription.endpoint)
+      const { error } = await supabase.from('push_subscriptions').delete().eq('endpoint', subscription.endpoint)
+      if (error) return { ok: false, error }
     }
     await subscription.unsubscribe()
+    publishPushState(false)
+    return { ok: true }
   } catch (err) {
     console.warn('[push] unsubscribe failed:', err?.message)
+    return { ok: false, error: err }
   }
 }

@@ -1,9 +1,35 @@
-# Supabase project config — Traker
-# Used by the Supabase CLI. Link with:
-#   supabase link --project-ref tuzwecxijdblgihidhyo
+# Supabase local project config — Traker.
+# Dedicated ports avoid collisions with the separate traker-palenque stack.
 
-project_id = "tuzwecxijdblgihidhyo"
+project_id = "traker-local"
+
+[api]
+port = 55321
+
+[db]
+port = 55322
+shadow_port = 55320
+
+[studio]
+port = 55323
+
+[local_smtp]
+port = 55324
+smtp_port = 55325
+pop3_port = 55326
+
+[analytics]
+port = 55327
+vector_port = 55328
+
+[edge_runtime]
+inspector_port = 55383
 
 [functions.send-reminders]
 # Invoked by pg_cron with a shared secret, not a user JWT.
 verify_jwt = false
+
+[functions.delete-account]
+# The gateway verifies the JWT and the function independently validates the
+# user, session_id and sign-in freshness before using the service role.
+verify_jwt = true

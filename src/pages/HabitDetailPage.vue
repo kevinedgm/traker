@@ -1,851 +1,327 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, BarChart3, ChevronRight, MoreHorizontal, PauseCircle, Pencil, Trash2 } from 'lucide-vue-next'
+import {
+  MoreHorizontal,
+  PauseCircle,
+  Pencil,
+  PlayCircle,
+  Trash2,
+} from 'lucide-vue-next'
+import LogModal from '@/components/habits/LogModal.vue'
 import { resolveHabitIcon } from '@utils/icons'
-import { useHabitsStore } from '@stores/habits'
-import DayGrid from '@components/habits/DayGrid.vue'
-import LogModal from '@components/habits/LogModal.vue'
-import CreateHabitModal from '@components/habits/CreateHabitModal.vue'
+import { normalizeHabitDuration, useHabitsStore } from '@stores/habits'
+import { habitScheduleLabel } from '@/features/habits/domain.js'
+import { useCopy } from '@/composables/useCopy'
+import { useToast } from '@/composables/useToast'
+import {
+  AuroraButton,
+  AuroraConfirmDialog,
+  AuroraFlexibleCalendar,
+  AuroraHabitIcon,
+  AuroraIconButton,
+  AuroraInput,
+  AuroraMenu,
+  AuroraModal,
+  AuroraStatusTag,
+  AuroraTopBar,
+  AuroraWeeklyPath,
+} from '@components/aurora/index.js'
 
-const route  = useRoute()
+const route = useRoute()
 const router = useRouter()
-const store  = useHabitsStore()
+const store = useHabitsStore()
+const { getPhrase } = useCopy()
+const toast = useToast()
 
-const habit      = computed(() => store.habits.find(h => h.id === route.params.id))
-const currentDay = computed(() => habit.value ? store.getCurrentDay(habit.value) : 0)
-const completed  = computed(() => habit.value ? store.getCompletedDays(habit.value) : 0)
-const percent    = computed(() => habit.value ? Math.min(store.getProgress(habit.value), 100) : 0)
-const flexibleDays = computed(() =>
-  habit.value
-    ? Object.values(habit.value.logs ?? {}).filter(log => log.level === 4).length
-    : 0
-)
+const habit = computed(() => store.habits.find(item => item.id === route.params.id))
+const currentDay = computed(() => habit.value ? Math.max(1, Number(store.getCurrentDay(habit.value)) || 1) : 0)
+const selectedDay = ref(null)
+const showOptions = ref(false)
+const showEdit = ref(false)
+const showDelete = ref(false)
+const editName = ref('')
+const editDuration = ref('')
+const growthShape = ref('')
+let growthFrame
+let growthTime = 0
 
-// Continuity over the last 7 elapsed days (flexible days count too):
-// rewards showing up this week, even if older days were rough.
+const levelToState = { 0:'skipped', 1:'partial', 2:'partial', 3:'complete', 4:'adapted' }
+const legend = [
+  { status:'complete', label:'Sí' },
+  { status:'partial', label:'A medias' },
+  { status:'skipped', label:'No' },
+  { status:'adapted', label:'Descanso consciente' },
+  { status:'none', label:'Sin registro' },
+]
+const menuItems = computed(() => [
+  { value:'edit', label:'Editar hábito', icon:Pencil },
+  { value:'pause', label:habit.value?.isActive === false ? 'Retomar hábito' : 'Pausar hábito', icon:habit.value?.isActive === false ? PlayCircle : PauseCircle },
+  { value:'delete', label:'Eliminar hábito', icon:Trash2, destructive:true },
+])
+
 const week = computed(() => {
-  if (!habit.value) return { kept: 0, window: 7 }
-  const cur   = currentDay.value
-  const start = Math.max(1, cur - 6)
+  if (!habit.value) return { kept:0, window:7 }
+  const start = Math.max(1, currentDay.value - 6)
   let kept = 0
-  for (let d = start; d <= cur; d++) {
-    const lvl = habit.value.logs?.[d]?.level
-    if (lvl >= 1 && lvl <= 4) kept++
+  for (let day = start; day <= currentDay.value; day++) {
+    const level = habit.value.logs?.[day]?.level
+    if (level >= 1 && level <= 4) kept++
   }
-  return { kept, window: cur - start + 1 }
+  return { kept, window:currentDay.value - start + 1 }
+})
+const recentDays = computed(() => {
+  if (!habit.value) return []
+  const start = Math.max(1, currentDay.value - 6)
+  return Array.from({ length:currentDay.value - start + 1 }, (_, index) => {
+    const day = start + index
+    const level = habit.value.logs?.[day]?.level
+    return {
+      label:day === currentDay.value ? 'Hoy' : `D${day}`,
+      state:level === undefined ? 'none' : levelToState[level],
+      today:day === currentDay.value,
+    }
+  })
+})
+const calendarDays = computed(() => habit.value
+  ? Array.from({ length:habit.value.duration }, (_, index) => {
+      const day = index + 1
+      const level = habit.value.logs?.[day]?.level
+      return {
+        day,
+        state:level === undefined ? 'none' : levelToState[level],
+        today:day === currentDay.value,
+        future:day > currentDay.value,
+      }
+    })
+  : [])
+const todayLogged = computed(() => Boolean(habit.value?.logs?.[currentDay.value]))
+const primaryLabel = computed(() => habit.value?.isActive === false
+  ? 'Retomar y registrar hoy'
+  : todayLogged.value
+    ? 'Actualizar registro de hoy'
+    : 'Registrar cómo estuvo hoy')
+const dominant = computed(() => {
+  if (!habit.value) return null
+  const counts = { yes:0, partial:0, no:0 }
+  Object.entries(habit.value.logs ?? {}).forEach(([day, log]) => {
+    if (Number(day) > currentDay.value) return
+    const bucket = log.level === 3 ? 'yes' : [1, 2].includes(log.level) ? 'partial' : 'no'
+    counts[bucket]++
+  })
+  const total = Object.values(counts).reduce((sum, count) => sum + count, 0)
+  if (!total) return null
+  const [level, count] = Object.entries(counts).sort((a, b) => b[1] - a[1])[0]
+  const labels = { yes:'Sí', partial:'A medias', no:'No o descanso consciente' }
+  return { label:labels[level], ratio:Math.round(count / total * 100) }
 })
 
-const selectedDay = ref(null)
-const showLog     = ref(false)
-const showOptions = ref(false)
-const showEdit    = ref(false)
-const showDelete  = ref(false)
-
-function onCellTap(day) {
-  if (day > currentDay.value) return
-  selectedDay.value = day
-  showLog.value = true
+function generateGrowth(time) {
+  const cols = 30
+  const rows = 14
+  const centerX = (cols - 1) / 2
+  const centerY = (rows - 1) / 2
+  return Array.from({ length:rows }, (_, y) => Array.from({ length:cols }, (_, x) => {
+    const dx = (x - centerX) / centerX
+    const dy = (y - centerY) / centerY
+    const angle = Math.atan2(dy, dx)
+    const distance = Math.sqrt(dx * dx + dy * dy)
+    const breathe = .72 + .22 * Math.sin(time * .7)
+    const wave = .18 * Math.sin(angle * 2.5 + time * 1.1) + .12 * Math.sin(angle * 4.2 - time * .85) + .09 * Math.cos(distance * 6 - time * 1.3)
+    const falloff = Math.max(0, 1 - distance / ((breathe + wave) * 1.05))
+    const density = Math.pow(falloff, 1.4)
+    const threshold = .12 + .08 * Math.sin(time * .5 + x * .07 + y * .06)
+    const rawNoise = (Math.sin(x * 12.9898 + y * 78.233 + 7) * 43758.5453) % 1
+    const noise = rawNoise < 0 ? rawNoise + 1 : rawNoise
+    if (density > threshold) return noise < .35 + density * .5 ? '1' : '0'
+    if (density > threshold * .4) return noise < .25 ? (noise < .12 ? '1' : '0') : ' '
+    return ' '
+  }).join('')).join('\n')
 }
-
-function onLogClose() {
-  showLog.value = false
-  setTimeout(() => { selectedDay.value = null }, 300)
+function drawGrowth() {
+  growthShape.value = generateGrowth(growthTime)
+  growthTime += .03
+  growthFrame = window.requestAnimationFrame(drawGrowth)
 }
+onMounted(() => {
+  if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) growthShape.value = generateGrowth(0)
+  else drawGrowth()
+})
+onBeforeUnmount(() => {
+  window.cancelAnimationFrame(growthFrame)
+})
 
-function pauseHabit() {
+function selectToday() {
   if (!habit.value) return
-  store.updateHabit(habit.value.id, { isActive: false })
-  router.push({ name: 'dashboard' })
+  if (habit.value.isActive === false) store.updateHabit(habit.value.id, { isActive:true })
+  selectedDay.value = currentDay.value
 }
-
+function handleLogSaved(result) {
+  if (!habit.value) return
+  const event = result.status === 'not_done' || result.status === 'conscious_skip'
+    ? 'habit_skipped'
+    : result.minimumUsed ? 'minimal_version' : result.status === 'done' ? 'habit_completed' : 'habit_partial'
+  const habitName = String(habit.value.name ?? '').trim() || 'el hábito'
+  toast.show({ message: getPhrase(event, { habit: habit.value, vars: { habitName } }).text })
+}
+function openEdit() {
+  if (!habit.value) return
+  editName.value = habit.value.name
+  editDuration.value = String(habit.value.duration)
+  showEdit.value = true
+}
+function saveEdit() {
+  if (!habit.value || editName.value.trim().length < 2) return
+  store.updateHabit(habit.value.id, {
+    name:editName.value.trim(),
+    duration:normalizeHabitDuration(editDuration.value, habit.value.duration),
+  })
+  showEdit.value = false
+  toast.show({ message: 'Cambios guardados' })
+}
+function togglePause() {
+  if (!habit.value) return
+  const next = habit.value.isActive === false
+  store.updateHabit(habit.value.id, { isActive:next })
+  if (next) {
+    const habitName = String(habit.value.name ?? '').trim() || 'el hábito'
+    toast.show({ message: getPhrase('habit_returned', { habit: habit.value, vars: { habitName } }).text })
+  } else {
+    const habitName = String(habit.value.name ?? '').trim() || 'el hábito'
+    toast.show({ message: getPhrase('habit_paused', { habit: habit.value, vars: { habitName } }).text })
+  }
+}
+function onMenuSelect(value) {
+  showOptions.value = false
+  if (value === 'edit') openEdit()
+  else if (value === 'pause') togglePause()
+  else if (value === 'delete') showDelete.value = true
+}
 function deleteHabit() {
   if (!habit.value) return
-  const id = habit.value.id
-  store.removeHabit(id)
+  store.removeHabit(habit.value.id)
+  router.replace({ name:'dashboard' })
+}
+function pauseFromDelete() {
   showDelete.value = false
-  router.replace({ name: 'dashboard' })
+  if (habit.value?.isActive !== false) togglePause()
 }
 </script>
 
 <template>
-  <!-- Not found -->
   <div v-if="!habit" class="not-found">
     <p>Hábito no encontrado</p>
-    <button class="btn-ghost" @click="router.push({ name: 'dashboard' })">← Volver</button>
+    <AuroraButton variant="ghost" @click="router.push({name:'dashboard'})">Volver</AuroraButton>
   </div>
 
-  <!-- Detail -->
-  <main v-else class="detail" :style="{ '--hc': habit.color }">
+  <main v-else class="detail" :style="{'--hc':habit.color}">
+    <div class="detail__scroll">
+      <div class="detail__inner">
+        <AuroraTopBar title="" back @back="router.push({name:'dashboard'})">
+          <template #actions>
+            <div class="detail__menu-wrap">
+              <AuroraIconButton label="Opciones del hábito" :active="showOptions" @click="showOptions=!showOptions">
+                <MoreHorizontal :size="20" :stroke-width="1.75" aria-hidden="true" />
+              </AuroraIconButton>
+              <AuroraMenu :open="showOptions" :items="menuItems" align="right" @select="onMenuSelect" @close="showOptions=false" />
+            </div>
+          </template>
+        </AuroraTopBar>
 
-    <!-- Accent line top -->
-    <div class="detail__topline" aria-hidden="true" />
+        <div class="detail__layout">
+          <div class="detail__column">
+            <section class="detail__identity">
+              <AuroraHabitIcon :tone="habit.color" :size="52">
+                <component :is="resolveHabitIcon(habit.icon)" :size="26" :stroke-width="1.75" aria-hidden="true" />
+              </AuroraHabitIcon>
+              <div>
+                <h1>{{habit.name}}</h1>
+                <p><span>{{habitScheduleLabel(habit)}} · {{habit.duration}} días</span><AuroraStatusTag :status="habit.isActive===false?'paused':'started'" :label="habit.isActive===false?'Pausado':'En camino'" /></p>
+              </div>
+            </section>
 
-    <!-- ─── Full-width nav ─────────────────────────── -->
-    <nav class="detail__nav">
-      <button
-        class="detail__nav-btn"
-        aria-label="Volver"
-        @click="router.push({ name: 'dashboard' })"
-      >
-        <ArrowLeft :size="18" :stroke-width="2" />
-        <span class="detail__nav-back-label">Volver</span>
-      </button>
+            <button class="detail__primary" type="button" @click="selectToday">
+              <span>{{primaryLabel}}</span><span>Día {{currentDay}}</span>
+            </button>
 
-      <span class="detail__nav-title">{{ habit.name }}</span>
+            <figure class="detail__growth" role="img" :aria-label="`Forma de crecimiento del hábito: día ${currentDay} de ${habit.duration}.`">
+              <div aria-hidden="true"><pre>{{growthShape}}</pre></div>
+              <figcaption><span>{{dominant?`Predomina ${dominant.label.toLowerCase()} · ${dominant.ratio}%`:'Aún sin registros'}}</span><span>Día {{currentDay}} de {{habit.duration}}</span></figcaption>
+            </figure>
 
-      <div class="detail__nav-actions">
-        <span class="detail__nav-pct" :style="{ color: habit.color }">{{ percent }}%</span>
-        <button
-          class="detail__nav-btn detail__nav-btn--icon"
-          type="button"
-          aria-label="Opciones del hábito"
-          :aria-expanded="showOptions"
-          @click="showOptions = !showOptions"
-        >
-          <MoreHorizontal :size="18" :stroke-width="2" />
-        </button>
+            <section class="detail__trajectory">
+              <div><h2>Tu trayectoria reciente</h2><p>{{week.kept}} de {{week.window}} días tienen registro. Los días flexibles también cuentan.</p></div>
+              <AuroraWeeklyPath :days="recentDays" />
+            </section>
+          </div>
 
-        <div v-if="showOptions" class="detail__menu" role="menu">
-          <button type="button" role="menuitem" class="detail__menu-item" @click="showEdit = true; showOptions = false">
-            <Pencil :size="15" :stroke-width="2" aria-hidden="true" />
-            Editar hábito
-          </button>
-          <button type="button" role="menuitem" class="detail__menu-item" @click="pauseHabit">
-            <PauseCircle :size="15" :stroke-width="2" aria-hidden="true" />
-            Pausar hábito
-          </button>
-          <button type="button" role="menuitem" class="detail__menu-item detail__menu-item--danger" @click="showDelete = true; showOptions = false">
-            <Trash2 :size="15" :stroke-width="2" aria-hidden="true" />
-            Eliminar hábito
-          </button>
+          <section class="detail__register">
+            <div><h2>Tu registro</h2><p>Toca un día para registrar cómo estuvo.</p></div>
+            <AuroraFlexibleCalendar :days="calendarDays" :selected="selectedDay" @select="day=>selectedDay=day" />
+            <div class="detail__legend"><AuroraStatusTag v-for="item in legend" :key="item.status" :status="item.status" :label="item.label" /></div>
+          </section>
         </div>
       </div>
-    </nav>
+    </div>
 
-    <!-- ─── Two-column body ────────────────────────── -->
-    <div class="detail__body">
+    <LogModal v-if="selectedDay!==null" :habit="habit" :day="selectedDay" @saved="handleLogSaved" @close="selectedDay=null" />
 
-      <!-- LEFT: info panel -->
-      <aside class="detail__left">
+    <AuroraModal :open="showEdit" title="Editar hábito" @close="showEdit=false">
+      <div class="detail__edit-form"><AuroraInput v-model="editName" label="Nombre del hábito"/><AuroraInput v-model="editDuration" label="Duración (días)" type="number"/></div>
+      <template #footer><AuroraButton variant="ghost" @click="showEdit=false">Cancelar</AuroraButton><AuroraButton @click="saveEdit">Guardar</AuroraButton></template>
+    </AuroraModal>
 
-        <!-- Identity -->
-        <div class="detail__identity">
-          <div class="detail__emoji">
-          <component :is="resolveHabitIcon(habit.icon)" :size="28" :stroke-width="1.6" />
-        </div>
-          <div class="detail__identity-text">
-            <h1 class="detail__name">{{ habit.name }}</h1>
-            <p class="detail__meta">{{ habit.duration }} días · {{ habit.isActive === false ? 'pausado' : 'en camino' }}</p>
-          </div>
-        </div>
-
-        <!-- Big percent + progress -->
-        <div class="detail__prog-block">
-          <div class="detail__prog-header">
-            <span class="detail__prog-label">Progreso</span>
-            <span class="detail__prog-pct">{{ percent }}%</span>
-          </div>
-          <div class="detail__progress-track">
-            <div class="detail__progress-fill" :style="{ width: `${percent}%` }" />
-          </div>
-          <div class="detail__progress-labels">
-            <span>{{ completed }} / {{ habit.duration }} días construidos</span>
-            <span>Podemos seguir desde aquí</span>
-          </div>
-        </div>
-
-        <!-- Stat boxes -->
-        <div class="detail__stat-boxes">
-          <div class="detail__stat-box">
-            <span class="detail__stat-box__val">{{ currentDay }}</span>
-            <span class="detail__stat-box__label">Día actual</span>
-          </div>
-          <div class="detail__stat-box detail__stat-box--accent">
-            <span class="detail__stat-box__val">{{ completed }}</span>
-            <span class="detail__stat-box__label">Construidos</span>
-          </div>
-          <div class="detail__stat-box">
-            <span class="detail__stat-box__val">{{ flexibleDays }}</span>
-            <span class="detail__stat-box__label">Flexibles</span>
-          </div>
-          <div class="detail__stat-box">
-            <span class="detail__stat-box__val">{{ week.kept }}/{{ week.window }}</span>
-            <span class="detail__stat-box__label">Esta semana</span>
-          </div>
-        </div>
-
-        <!-- Stats link -->
-        <button class="detail__stats-link" type="button">
-          <span class="detail__stats-icon">
-            <BarChart3 :size="16" :stroke-width="2" />
-          </span>
-          <span>Ver estadísticas</span>
-          <ChevronRight :size="15" :stroke-width="2" style="color: var(--color-text-faint); margin-left: auto" />
-        </button>
-
-      </aside>
-
-      <!-- RIGHT: grid panel -->
-      <section class="detail__right">
-        <p class="detail__section-label">Tu registro</p>
-
-        <!-- Legend -->
-        <div class="detail__legend" aria-label="Leyenda de colores">
-          <span class="detail__legend-item">
-            <span class="detail__legend-swatch detail__legend-swatch--3" :style="{ background: habit.color }" />
-            Excelente
-          </span>
-          <span class="detail__legend-item">
-            <span class="detail__legend-swatch detail__legend-swatch--2"
-              :style="{ background: `color-mix(in srgb, ${habit.color} 60%, var(--color-surface))` }" />
-            Bien
-          </span>
-          <span class="detail__legend-item">
-            <span class="detail__legend-swatch detail__legend-swatch--1"
-              :style="{ background: `color-mix(in srgb, ${habit.color} 28%, var(--color-surface-raised))` }" />
-            Mínimo
-          </span>
-          <span class="detail__legend-item">
-            <span class="detail__legend-swatch detail__legend-swatch--4" />
-            Flexible
-          </span>
-          <span class="detail__legend-item">
-            <span class="detail__legend-swatch detail__legend-swatch--0" />
-            No realizado
-          </span>
-        </div>
-
-        <p class="detail__tap-hint">Toca un día para registrar cómo estuvo</p>
-
-        <DayGrid
-          :habit="habit"
-          :current-day="currentDay"
-          :selected-day="selectedDay"
-          @cell-tap="onCellTap"
-        />
-      </section>
-
-    </div><!-- /detail__body -->
-
-    <!-- Log modal -->
-    <LogModal
-      v-if="showLog && selectedDay !== null"
-      :habit="habit"
-      :day="selectedDay"
-      @close="onLogClose"
+    <AuroraConfirmDialog
+      :open="showDelete"
+      title="¿Eliminar este hábito?"
+      body="También se eliminarán sus registros. Si sólo necesitas espacio, puedes pausarlo y retomarlo después."
+      confirm-label="Eliminar"
+      cancel-label="Conservar"
+      pause-label="Pausar"
+      destructive
+      @confirm="deleteHabit"
+      @pause="pauseFromDelete"
+      @cancel="showDelete=false"
     />
-
-    <CreateHabitModal
-      v-if="showEdit"
-      :habit="habit"
-      @close="showEdit = false"
-    />
-
-    <div v-if="showDelete" class="detail-confirm__scrim" @click="showDelete = false" />
-    <section
-      v-if="showDelete"
-      class="detail-confirm"
-      role="alertdialog"
-      aria-modal="true"
-      aria-label="Eliminar hábito"
-    >
-      <div class="detail-confirm__icon" aria-hidden="true">
-        <Trash2 :size="20" :stroke-width="2" />
-      </div>
-      <h2>¿Eliminar este hábito?</h2>
-      <p>Esta acción eliminará también su progreso registrado.</p>
-      <div class="detail-confirm__actions">
-        <button type="button" class="detail-confirm__btn" @click="showDelete = false">Cancelar</button>
-        <button type="button" class="detail-confirm__btn detail-confirm__btn--danger" @click="deleteHabit">Eliminar</button>
-      </div>
-    </section>
-
   </main>
 </template>
 
 <style scoped>
-/* ══════════════════════════════════════════════════════
-   NOT FOUND
-   ══════════════════════════════════════════════════════ */
-.not-found {
-  display: flex;
-  min-height: 100svh;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 1rem;
-  color: var(--color-text-muted);
+/* impeccable-disable design-system-font-size -- escala puntual reproducida del Habit Detail.html aprobado */
+.not-found{display:flex;min-height:100svh;flex-direction:column;align-items:center;justify-content:center;gap:16px;color:var(--text-muted);font:400 15px/1.5 var(--font-core)}
+.detail{position:relative;min-height:100svh;background:var(--background-base)}
+.detail::before{position:fixed;z-index:20;inset:0 0 auto;height:2px;background:var(--hc);content:''}
+.detail__scroll{min-height:100svh;padding:0 20px 40px}
+.detail__inner{display:flex;width:100%;max-width:none;margin-inline:auto;flex-direction:column;gap:24px}
+.detail__menu-wrap{position:relative}
+.detail__layout{display:flex;flex-direction:column;gap:24px}
+.detail__column{display:flex;flex-direction:column;gap:24px}
+.detail__identity{display:flex;align-items:center;gap:14px}
+.detail__identity>div{min-width:0}
+.detail__identity h1{margin:0;color:var(--text-primary);font:600 24px/1.2 var(--font-core);letter-spacing:-.02em}
+.detail__identity p{display:flex;margin:4px 0 0;align-items:center;gap:8px;color:var(--text-muted);font:500 13px/1 var(--font-core)}
+.detail__primary{display:flex;min-height:56px;padding:0 20px;align-items:center;justify-content:space-between;gap:12px;border:0;border-radius:var(--radius-pill);background:var(--hc);color:#08111A;font:600 15px/1 var(--font-core);cursor:pointer}
+.detail__primary span:last-child{opacity:.72;font-variant-numeric:tabular-nums}
+.detail__growth{display:flex;margin:0;padding:18px 0;flex-direction:column;gap:10px;border-block:1px solid var(--border-subtle)}
+.detail__growth>div{display:grid;min-height:120px;overflow:hidden;place-items:center}
+.detail__growth pre{margin:0;color:var(--hc);font:400 6.5px/1.05 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.4px;white-space:pre;opacity:.9;user-select:none}
+.detail__growth figcaption{display:flex;align-items:baseline;justify-content:space-between;gap:12px;color:var(--text-muted);font:400 12px/1.4 var(--font-core)}
+.detail__growth figcaption span:first-child{color:var(--hc);font-weight:600}
+.detail__trajectory,.detail__register{display:flex;flex-direction:column;gap:12px}
+.detail__trajectory h2,.detail__register h2{margin:0;color:var(--text-primary);font:600 17px/1.3 var(--font-core)}
+.detail__register h2{font-size:20px}
+.detail__trajectory p{max-width:38ch;margin:4px 0 0;color:var(--text-secondary);font:400 14px/1.5 var(--font-core)}
+.detail__register>div:first-child p{margin:2px 0 0;color:var(--text-muted);font:400 13px/1.5 var(--font-core)}
+.detail__register{gap:14px}
+.detail__legend{display:flex;padding-top:14px;flex-wrap:wrap;gap:8px 16px;border-top:1px solid var(--border-subtle)}
+.detail__edit-form{display:flex;flex-direction:column;gap:14px}
+@media(min-width:768px){
+  .detail__scroll{padding:0 64px 48px}
+  .detail__inner{max-width:640px}
 }
-
-/* ══════════════════════════════════════════════════════
-   PAGE SHELL
-   ══════════════════════════════════════════════════════ */
-.detail {
-  position: relative;
-  min-height: 100svh;
-  background:
-    radial-gradient(ellipse 70% 50% at 30% 0%,
-      color-mix(in srgb, var(--hc) 6%, transparent),
-      transparent 55%),
-    var(--color-bg);
-  padding-bottom: var(--space-10);
-}
-
-/* ══════════════════════════════════════════════════════
-   ACCENT LINE
-   ══════════════════════════════════════════════════════ */
-.detail__topline {
-  position: fixed;
-  inset: 0 0 auto;
-  height: 2px;
-  background: var(--hc);
-  z-index: 20;
-  box-shadow: 0 0 12px color-mix(in srgb, var(--hc) 50%, transparent);
-}
-
-/* ══════════════════════════════════════════════════════
-   NAV — full width, sticky
-   ══════════════════════════════════════════════════════ */
-.detail__nav {
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: max(1rem, env(safe-area-inset-top)) 1.25rem 0.75rem;
-  background: color-mix(in srgb, var(--color-bg) 80%, transparent);
-  backdrop-filter: blur(20px) saturate(1.8);
-  -webkit-backdrop-filter: blur(20px) saturate(1.8);
-  border-bottom: 1px solid var(--color-border);
-}
-
-.detail__nav-btn {
-  display: flex;
-  align-items: center;
-  gap: 0.375rem;
-  padding: 0.375rem 0.75rem 0.375rem 0.5rem;
-  border-radius: var(--radius-full);
-  border: 1px solid var(--color-border);
-  background: var(--color-surface);
-  color: var(--color-text-muted);
-  font-size: 0.8125rem;
-  font-weight: 600;
-  cursor: pointer;
-  flex-shrink: 0;
-  -webkit-tap-highlight-color: transparent;
-  transition:
-    background var(--duration-base) var(--ease-standard),
-    color      var(--duration-base) var(--ease-standard),
-    transform  var(--duration-fast) var(--ease-standard);
-}
-.detail__nav-btn:hover  { background: var(--color-surface-raised); color: var(--color-text); }
-.detail__nav-btn:active { transform: scale(0.98); }
-
-/* Title in nav — hidden on mobile (shown in header), visible on tablet+ */
-.detail__nav-title {
-  flex: 1;
-  text-align: center;
-  font-size: 0.875rem;
-  font-weight: 700;
-  color: var(--color-text);
-  letter-spacing: -0.01em;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  display: none; /* shown at tablet+ */
-}
-
-.detail__nav-pct {
-  font-size: 0.875rem;
-  font-weight: 800;
-  letter-spacing: -0.01em;
-  font-variant-numeric: tabular-nums;
-  display: none; /* shown at tablet+ */
-}
-
-.detail__nav-actions {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin-left: auto;
-}
-
-.detail__nav-btn--icon {
-  width: 2.25rem;
-  height: 2.25rem;
-  justify-content: center;
-  padding: 0;
-}
-
-.detail__menu {
-  position: absolute;
-  top: calc(100% + var(--space-2));
-  right: 0;
-  z-index: 30;
-  min-width: 13rem;
-  padding: var(--space-2);
-  border-radius: var(--radius-card-md);
-  border: 1px solid var(--color-border);
-  background: color-mix(in srgb, var(--color-surface) 94%, transparent);
-  box-shadow: var(--shadow-float);
-  backdrop-filter: blur(20px) saturate(1.4);
-  -webkit-backdrop-filter: blur(20px) saturate(1.4);
-}
-
-.detail__menu-item {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: 2.5rem;
-  padding: 0 var(--space-3);
-  border-radius: var(--radius-input);
-  color: var(--color-text);
-  font-size: var(--text-xs);
-  font-weight: 720;
-  text-align: left;
-  transition:
-    background var(--duration-base) var(--ease-standard),
-    color var(--duration-base) var(--ease-standard);
-}
-
-.detail__menu-item:hover {
-  background: var(--color-surface-raised);
-}
-
-.detail__menu-item--danger {
-  color: color-mix(in srgb, var(--color-danger) 78%, var(--color-text));
-}
-
-.detail__menu-item--danger:hover {
-  background: color-mix(in srgb, var(--color-danger) 8%, var(--color-surface-raised));
-}
-
-/* Back label hidden on very small screens */
-.detail__nav-back-label {
-  display: none;
-}
-
-/* ══════════════════════════════════════════════════════
-   TWO-COLUMN BODY
-   ══════════════════════════════════════════════════════ */
-.detail__body {
-  display: flex;
-  flex-direction: column; /* mobile: stack */
-  width: 100%;
-  max-width: 430px;
-  margin-inline: auto;
-}
-
-/* ══════════════════════════════════════════════════════
-   LEFT PANEL — info / identity
-   ══════════════════════════════════════════════════════ */
-.detail__left {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-5);
-  padding: var(--space-5) 1.25rem;
-}
-
-/* Identity row */
-.detail__identity {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-}
-
-.detail__emoji {
-  width: 3.25rem;
-  height: 3.25rem;
-  display: grid;
-  place-items: center;
-  background: color-mix(in srgb, var(--hc) 12%, var(--color-surface));
-  border: 1px solid color-mix(in srgb, var(--hc) 20%, var(--color-border));
-  border-radius: var(--radius-xl);
-  color: var(--hc);
-  flex-shrink: 0;
-}
-
-.detail__identity-text { min-width: 0; }
-
-.detail__name {
-  font-size: clamp(1.25rem, 4vw, 1.75rem);
-  font-weight: 800;
-  color: var(--color-text);
-  letter-spacing: -0.03em;
-  line-height: 1.1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.detail__meta {
-  font-size: 0.75rem;
-  color: var(--color-text-faint);
-  margin-top: 3px;
-  font-weight: 500;
-}
-
-/* Progress block */
-.detail__prog-block {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-}
-
-.detail__prog-header {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-}
-
-.detail__prog-label {
-  font-size: 0.625rem;
-  font-weight: 800;
-  color: var(--color-text-faint);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-}
-
-.detail__prog-pct {
-  font-size: 1.125rem;
-  font-weight: 800;
-  color: var(--hc);
-  letter-spacing: -0.02em;
-  font-variant-numeric: tabular-nums;
-}
-
-.detail__progress-track {
-  height: 6px;
-  background: var(--color-surface-raised);
-  border-radius: 99px;
-  overflow: hidden;
-}
-
-.detail__progress-fill {
-  height: 100%;
-  background: var(--hc);
-  border-radius: 99px;
-  box-shadow: 0 0 8px color-mix(in srgb, var(--hc) 40%, transparent);
-  transition: width 700ms var(--ease-standard);
-}
-
-.detail__progress-labels {
-  display: flex;
-  justify-content: space-between;
-  font-size: 0.65rem;
-  color: var(--color-text-faint);
-  font-weight: 500;
-}
-
-/* Stat boxes — 4-col row */
-.detail__stat-boxes {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: var(--space-2);
-}
-
-.detail__stat-box {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 3px;
-  padding: var(--space-3) var(--space-2);
-  border-radius: var(--radius-xl);
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  text-align: center;
-}
-
-.detail__stat-box--accent {
-  background: color-mix(in srgb, var(--hc) 8%, var(--color-surface));
-  border-color: color-mix(in srgb, var(--hc) 22%, var(--color-border));
-}
-
-.detail__stat-box__val {
-  display: block;
-  font-size: var(--text-xl);
-  font-weight: 800;
-  color: var(--color-text);
-  letter-spacing: -0.02em;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
-}
-
-.detail__stat-box--accent .detail__stat-box__val {
-  color: var(--hc);
-}
-
-.detail__stat-box__label {
-  display: block;
-  font-size: 0.55rem;
-  font-weight: 700;
-  color: var(--color-text-faint);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  line-height: 1;
-}
-
-.detail-confirm__scrim {
-  position: fixed;
-  inset: 0;
-  z-index: 80;
-  background: rgb(0 0 0 / 0.58);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-}
-
-.detail-confirm {
-  position: fixed;
-  inset: auto var(--space-5) max(var(--space-5), env(safe-area-inset-bottom));
-  z-index: 81;
-  max-width: 28rem;
-  margin-inline: auto;
-  padding: var(--space-5);
-  border-radius: var(--radius-card-lg);
-  border: 1px solid color-mix(in srgb, var(--color-danger) 24%, var(--color-border));
-  background: var(--color-surface);
-  box-shadow: var(--shadow-float);
-}
-
-@media (min-width: 720px) {
-  .detail-confirm {
-    inset: 50% auto auto 50%;
-    width: min(92vw, 28rem);
-    transform: translate(-50%, -50%);
-  }
-}
-
-.detail-confirm__icon {
-  width: 2.75rem;
-  height: 2.75rem;
-  display: grid;
-  place-items: center;
-  border-radius: var(--radius-input);
-  background: color-mix(in srgb, var(--color-danger) 10%, var(--color-surface-raised));
-  color: color-mix(in srgb, var(--color-danger) 80%, var(--color-text));
-}
-
-.detail-confirm h2 {
-  margin-top: var(--space-4);
-  color: var(--color-text);
-  font-size: var(--text-xl);
-  font-weight: 800;
-  letter-spacing: -0.02em;
-}
-
-.detail-confirm p {
-  margin-top: var(--space-2);
-  color: var(--color-text-muted);
-  font-size: var(--text-sm);
-  line-height: 1.5;
-}
-
-.detail-confirm__actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--space-2);
-  margin-top: var(--space-5);
-}
-
-.detail-confirm__btn {
-  min-height: 2.5rem;
-  padding: 0 var(--space-4);
-  border-radius: var(--radius-full);
-  border: 1px solid var(--color-border);
-  background: var(--color-surface-raised);
-  color: var(--color-text);
-  font-size: var(--text-xs);
-  font-weight: 760;
-  transition:
-    border-color var(--duration-base) var(--ease-standard),
-    background var(--duration-base) var(--ease-standard),
-    transform var(--duration-fast) var(--ease-standard);
-}
-
-.detail-confirm__btn:active {
-  transform: scale(0.98);
-}
-
-.detail-confirm__btn--danger {
-  border-color: color-mix(in srgb, var(--color-danger) 34%, var(--color-border));
-  background: color-mix(in srgb, var(--color-danger) 8%, var(--color-surface-raised));
-  color: color-mix(in srgb, var(--color-danger) 82%, var(--color-text));
-}
-
-/* Stats link */
-.detail__stats-link {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-4);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-2xl);
-  background: var(--color-surface);
-  color: var(--color-text);
-  font-size: 0.8125rem;
-  font-weight: 600;
-  text-align: left;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-  transition:
-    background      var(--duration-base) var(--ease-standard),
-    border-color    var(--duration-base) var(--ease-standard);
-}
-
-.detail__stats-link:hover {
-  background: var(--color-surface-raised);
-  border-color: color-mix(in srgb, var(--hc) 30%, var(--color-border));
-}
-
-.detail__stats-icon {
-  width: 1.875rem;
-  height: 1.875rem;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--hc) 12%, transparent);
-  color: var(--hc);
-  flex-shrink: 0;
-}
-
-/* ══════════════════════════════════════════════════════
-   RIGHT PANEL — grid
-   ══════════════════════════════════════════════════════ */
-.detail__right {
-  padding: 0 1.25rem var(--space-6);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.detail__section-label {
-  font-size: 0.625rem;
-  font-weight: 800;
-  color: var(--color-text-faint);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-.detail__tap-hint {
-  font-size: 0.7rem;
-  color: var(--color-text-faint);
-  font-weight: 500;
-  opacity: 0.7;
-}
-
-/* ── Legend ─────────────────────────────────────────── */
-.detail__legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-3);
-}
-
-.detail__legend-item {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 0.625rem;
-  font-weight: 600;
-  color: var(--color-text-muted);
-}
-
-.detail__legend-swatch {
-  width: 10px;
-  height: 10px;
-  border-radius: 4px;
-  flex-shrink: 0;
-}
-
-.detail__legend-swatch--0 {
-  background: var(--color-surface-raised);
-  box-shadow: inset 0 0 0 1px var(--color-border);
-}
-
-.detail__legend-swatch--4 {
-  background: rgba(143, 144, 152, 0.18);
-  box-shadow: inset 0 0 0 1px rgba(143, 144, 152, 0.42);
-}
-
-/* ══════════════════════════════════════════════════════
-   TABLET (≥ 768px) — two real columns
-   ══════════════════════════════════════════════════════ */
-@media (min-width: 768px) {
-  .detail__nav-title  { display: block; }
-  .detail__nav-pct    { display: block; }
-  .detail__nav-back-label { display: inline; }
-
-  /* Two-column grid: fixed info panel + fluid grid panel */
-  .detail__body {
-    flex-direction: row;
-    align-items: flex-start;
-    padding: var(--space-6) var(--space-6) 0;
-    gap: var(--space-6);
-    max-width: 820px;
-  }
-
-  /* Left panel: fixed width, sticky below the nav */
-  .detail__left {
-    flex: 0 0 260px;
-    width: 260px;
-    padding: 0;
-    position: sticky;
-    top: 5rem; /* below sticky nav */
-  }
-
-  /* Name can wrap on desktop since we have enough space */
-  .detail__name {
-    white-space: normal;
-    font-size: 1.5rem;
-  }
-
-  /* Icon bigger on tablet */
-  .detail__emoji {
-    width: 3.75rem;
-    height: 3.75rem;
-  }
-
-  /* Right panel: fluid, takes remaining space */
-  .detail__right {
-    flex: 0 1 420px;
-    min-width: 0;
-    padding: 0;
-  }
-}
-
-/* ══════════════════════════════════════════════════════
-   DESKTOP (≥ 1024px) — wider left panel
-   ══════════════════════════════════════════════════════ */
-@media (min-width: 1024px) {
-  .detail__body {
-    padding: var(--space-8) var(--space-8) 0;
-    gap: var(--space-8);
-    max-width: 900px;
-  }
-
-  .detail__left {
-    flex: 0 0 300px;
-    width: 300px;
-    top: 5.5rem;
-  }
-
-  .detail__right {
-    flex-basis: 430px;
-  }
-
-  .detail__name { font-size: 1.75rem; }
-
-  .detail__emoji {
-    width: 4.25rem;
-    height: 4.25rem;
-    border-radius: var(--radius-2xl);
-  }
-
-  .detail__stat-box__val {
-    font-size: var(--text-2xl);
-  }
+@media(min-width:1024px){
+  .detail__scroll{padding:0 48px 48px}
+  .detail__inner{max-width:1080px}
+  .detail__layout{display:grid;margin-top:4px;grid-template-columns:340px minmax(0,1fr);gap:40px;align-items:start}
 }
 </style>

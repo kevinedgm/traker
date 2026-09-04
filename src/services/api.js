@@ -1,7 +1,9 @@
+import { KEYS } from '@/services/storage.js'
+
 const BASE_URL = import.meta.env.VITE_API_URL ?? '/api'
 
 async function request(method, path, body) {
-  const token = localStorage.getItem('traker:token')
+  const token = localStorage.getItem(KEYS.API_TOKEN)
 
   const res = await fetch(`${BASE_URL}${path}`, {
     method,

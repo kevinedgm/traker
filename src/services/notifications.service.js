@@ -30,6 +30,17 @@
  */
 
 import { storage } from '@services/storage'
+import { pickPhrase } from '@/features/copy/engine.js'
+import { readCopyState, writeCopyState } from '@/features/copy/state.js'
+import { features } from '@/config/features.js'
+import {
+  currentTimezone,
+  dayNumberForLocalDate,
+  isHabitScheduledForDate,
+  localDateKey,
+} from '@/features/habits/domain.js'
+import { evaluateNotificationPlan } from '@/features/notifications/planner.js'
+import { actionsForNotification } from '../../supabase/functions/_shared/notification-actions.js'
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -70,12 +81,24 @@ export async function requestPermission() {
 
 // ── Sent-notification log (for the diagnostics screen) ────────────────────
 
-const LOG_KEY = 'traker:notif-log'
-const LOG_MAX = 20
+const LOG_KEY = storage.KEYS.NOTIFICATION_LOG
+const LOG_MAX = 50
 
-function _recordSent(title, body) {
+function _recordSent(title, body, options = {}) {
   const log = storage.read(LOG_KEY, [])
-  log.unshift({ title, body: body ?? '', at: new Date().toISOString() })
+  const at = new Date().toISOString()
+  log.unshift({
+    title,
+    body: body ?? '',
+    at,
+    status: 'delivered',
+    kind: options?.data?.kind ?? null,
+    intentKey: options?.data?.intentKey ?? null,
+    localDate: options?.data?.localDate ?? null,
+    phraseId: options?.data?.phraseId ?? null,
+    copyVersion: options?.data?.copyVersion ?? null,
+    copyHash: options?.data?.copyHash ?? null,
+  })
   storage.write(LOG_KEY, log.slice(0, LOG_MAX))
 }
 
@@ -99,6 +122,21 @@ export function getNotificationLog() {
 export async function showNotification(title, options = {}) {
   if (!supported() || Notification.permission !== 'granted') return false
 
+  // With Traker visible, use the Aurora in-app banner from the notification
+  // design instead of asking the operating system to cover the interface.
+  if (document.visibilityState === 'visible') {
+    window.dispatchEvent(new CustomEvent('traker:notification', {
+      detail: {
+        title,
+        body: options.body ?? '',
+        phraseId: options?.data?.phraseId ?? null,
+        copyVersion: options?.data?.copyVersion ?? null,
+      },
+    }))
+    _recordSent(title, options.body, options)
+    return true
+  }
+
   // Try Service Worker first (survives tab going to background)
   if (swReady()) {
     try {
@@ -111,7 +149,7 @@ export async function showNotification(title, options = {}) {
         renotify: true,
         ...options,
       })
-      _recordSent(title, options.body)
+      _recordSent(title, options.body, options)
       return true
     } catch {
       // SW path failed — fall through to direct API
@@ -124,8 +162,61 @@ export async function showNotification(title, options = {}) {
     icon: ICON_URL,
     ...options,
   })
-  _recordSent(title, options.body)
+  _recordSent(title, options.body, options)
   return true
+}
+
+// ── Copy resolution (personality engine, imported directly — no Vue) ───────
+//
+// This file runs outside any component/composable context (it's a plain
+// module-level scheduler), so it talks to the pure engine directly instead
+// of going through useCopy.js. It shares the SAME localStorage history key
+// as useCopy.js, so anti-repetition stays consistent regardless of which
+// entry point resolved a given phrase.
+
+/**
+ * Resolve a copy-engine phrase for a notification body.
+ * @param {string} event
+ * @param {{ habit?: object, category?: string, vars?: object }} [opts]
+ * @returns {{ id: string, text: string }}
+ */
+function _resolveCopy(event, { habit = null, category, vars = {} } = {}) {
+  const copySettings = habit?.copySettings ?? null
+  const resolvedCategory = category || copySettings?.category || 'generic'
+
+  if (!features.copyPersonality) {
+    return pickPhrase({ event, category: resolvedCategory, tone: 'normal', vars }).phrase
+  }
+
+  const settings = _getSettings?.() ?? null
+  let tone = copySettings?.toneOverride || settings?.tone || 'no_respect'
+  if (copySettings?.carrillaEnabled === false) tone = 'normal'
+
+  const state = readCopyState()
+  const historyKey = `${event}:${resolvedCategory}`
+  const recentIds = state.recent[historyKey] ?? []
+  const disabledIds = [
+    ...state.disabled,
+    ...(Array.isArray(copySettings?.disabledEventIds) ? copySettings.disabledEventIds : []),
+  ]
+
+  const result = pickPhrase({
+    event,
+    category: resolvedCategory,
+    tone,
+    vars,
+    recentIds,
+    globalRecentIds: state.globalRecent,
+    customPhrases: copySettings?.customPhrases ?? null,
+    preferCustom: Boolean(copySettings?.preferCustomPhrases),
+    disabledIds,
+    favoriteIds: state.favorites,
+  })
+
+  state.recent[historyKey] = result.recentIds
+  state.globalRecent = result.globalRecentIds
+  writeCopyState(state)
+  return result.phrase
 }
 
 // ── Scheduler ──────────────────────────────────────────────────────────────
@@ -139,8 +230,22 @@ let _getHabits   = null
 /** @type {(() => object | null) | null} */
 let _getSettings = null
 
-/** Set of "habitId-date-HH:MM" keys — prevents double-fire in same minute */
-const _firedKeys = new Set()
+/** @type {(() => object | null) | null} */
+let _getContext = null
+
+let _tickRunning = false
+let _lastEvaluation = null
+let _cloudDeliveryActive = storage.read(storage.KEYS.PUSH_ACTIVE, false) === true
+
+export function setCloudDeliveryActive(active) {
+  _cloudDeliveryActive = Boolean(active)
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('traker:push-state', event => {
+    setCloudDeliveryActive(event.detail?.active === true)
+  })
+}
 
 /**
  * Start the reminder scheduler.
@@ -149,13 +254,14 @@ const _firedKeys = new Set()
  * @param {() => object[]} getHabitsFn  Reactive getter returning the habits array
  * @param {() => object | null} [getSettingsFn]  Reactive getter returning settings
  */
-export function startScheduler(getHabitsFn, getSettingsFn = null) {
+export function startScheduler(getHabitsFn, getSettingsFn = null, getContextFn = null) {
   _getHabits = getHabitsFn
   _getSettings = getSettingsFn
+  if (getContextFn) _getContext = getContextFn
   if (_interval !== null) return          // already running
 
-  _tick()                                 // fire immediately on start
-  _interval = setInterval(_tick, 30_000)  // then every 30 s
+  void runSchedulerTick()                                 // fire immediately on start
+  _interval = setInterval(() => void runSchedulerTick(), 30_000)  // then every 30 s
 }
 
 /** Stop the scheduler (e.g. on app unmount). */
@@ -169,6 +275,11 @@ export function stopScheduler() {
 /** True while the in-app reminder scheduler interval is alive. */
 export function isSchedulerRunning() {
   return _interval !== null
+}
+
+/** Most recent planner result, useful for diagnostics without re-planning. */
+export function getLastSchedulerEvaluation() {
+  return _lastEvaluation
 }
 
 // ── Diagnostics ────────────────────────────────────────────────────────────
@@ -209,6 +320,8 @@ export async function getDiagnostics() {
   const standalone =
     window.matchMedia?.('(display-mode: standalone)')?.matches === true ||
     window.navigator.standalone === true   // iOS Safari
+  const requiresHomeScreenForPush =
+    typeof window.navigator.standalone === 'boolean' && !standalone
 
   return {
     supported:        supported(),
@@ -216,23 +329,29 @@ export async function getDiagnostics() {
     swState,
     pushSubscribed,
     standalone,
+    requiresHomeScreenForPush,
     schedulerRunning: isSchedulerRunning(),
+    planner: _lastEvaluation,
   }
 }
 
 /**
  * Fire a test notification through the same path real reminders use.
+ * Pass `{ title, body }` to preview a specific resolved phrase (used by
+ * CreateHabitModal's "Probar notificación" for a habit's custom carrilla)
+ * — defaults to the generic morning-motivation copy otherwise.
+ * @param {{ title?: string, body?: string }} [override]
  * @returns {Promise<{ ok: boolean, reason?: string }>}
  */
-export async function sendTestNotification() {
+export async function sendTestNotification({ title, body } = {}) {
   if (!supported()) return { ok: false, reason: 'unsupported' }
   if (Notification.permission !== 'granted') {
     return { ok: false, reason: Notification.permission }
   }
 
   try {
-    const shown = await showNotification('Traker — prueba', {
-      body: 'Si ves esto, las notificaciones funcionan en este dispositivo.',
+    const shown = await showNotification(title || 'Traker', {
+      body: body || _resolveCopy('morning_motivation', {}).text,
       tag:  'traker-test',
       data: { url: '/settings/notifications' },
     })
@@ -242,116 +361,95 @@ export async function sendTestNotification() {
   }
 }
 
-/** Evict old keys from _firedKeys so memory stays bounded. */
-function _pruneOldKeys() {
-  if (_firedKeys.size < 200) return
-  // Keep only today's keys
-  const today = _todayStr()
-  for (const key of _firedKeys) {
-    if (!key.includes(today)) _firedKeys.delete(key)
-  }
-}
-
-function _todayStr() {
-  const d = new Date()
-  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`
-}
-
-function _getCurrentDay(habit) {
-  if (!habit?.createdAt) return 1
-  const created = new Date(habit.createdAt)
-  const today = new Date()
-  created.setHours(0, 0, 0, 0)
-  today.setHours(0, 0, 0, 0)
-  const diff = Math.floor((today - created) / 86_400_000)
-  const duration = Math.max(1, Number(habit?.duration) || 1)
-  return Math.min(Math.max(diff + 1, 1), duration)
-}
-
-function _hasLoggedToday(habit) {
-  const day = _getCurrentDay(habit)
-  return habit?.logs?.[day] !== undefined
-}
-
-const MORNING_MESSAGES = [
-  'Buen dia. Hoy tambien cuenta un paso pequeno.',
-  'Empieza suave: un registro basta para tomar impulso.',
-  'No tienes que hacerlo perfecto, solo empezar hoy.',
-  'Hazlo facil para tu yo de esta manana: un paso y seguimos.',
-]
-
-function _tick() {
-  if (Notification.permission !== 'granted') return
-  if (!_getHabits) return
-
-  _pruneOldKeys()
-
-  const now     = new Date()
-  const hhmm    = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
-  const weekday = now.getDay()            // 0 = Sunday … 6 = Saturday
-  const dateStr = _todayStr()
-  const habits  = _getHabits()
-  const settings = _getSettings?.() ?? null
-  const activeHabits = habits.filter(habit => habit?.isActive)
-
-  if (settings?.morningReminderEnabled && settings?.morningReminderTime === hhmm && activeHabits.length) {
-    const morningKey = `morning-${dateStr}-${hhmm}`
-    if (!_firedKeys.has(morningKey)) {
-      _firedKeys.add(morningKey)
-      const message = MORNING_MESSAGES[now.getDate() % MORNING_MESSAGES.length]
-      showNotification('Traker', {
-        body: message,
-        tag: 'daily-morning-motivation',
-        renotify: true,
-        data: { url: '/' },
-      })
-    }
-  }
-
-  for (const habit of habits) {
-    if (!habit?.isActive) continue
-
-    // Skip habits without a reminder time set
-    if (!habit.reminder) continue
-
-    // Skip if reminder time doesn't match current HH:MM
-    if (habit.reminder !== hhmm) continue
-
-    // Skip if today's weekday is not in the allowed days list
-    const days = habit.reminderDays
-    if (Array.isArray(days) && days.length > 0 && !days.includes(weekday)) continue
-
-    // Skip if today's entry is already registered
-    if (_hasLoggedToday(habit)) continue
-
-    // Deduplicate: only fire once per (habit, minute)
-    const fireKey = `${habit.id}-${dateStr}-${hhmm}`
-    if (_firedKeys.has(fireKey)) continue
-    _firedKeys.add(fireKey)
-
-    // Fire!
-    showNotification(`${habit.icon} ${habit.name}`, {
-      body:    '¡Es hora de registrar tu hábito!',
-      tag:     `habit-${habit.id}`,
-      renotify: true,
-      data:    { url: `/habit/${habit.id}` },
+function schedulerAgenda(habits, now, timezone) {
+  const localDate = localDateKey(now, timezone)
+  return habits
+    .filter(habit => isHabitScheduledForDate(habit, now))
+    .map(habit => {
+      const habitTimezone = habit.schedule?.timezone ?? timezone
+      const habitDate = localDateKey(now, habitTimezone)
+      const day = dayNumberForLocalDate(habit.createdAt, habitDate, habitTimezone)
+      return {
+        id: habit.id,
+        reminderTime: habit.reminder,
+        registered: habit.logs?.[day] !== undefined,
+        isActive: habit.isActive !== false,
+        localDate,
+      }
     })
+}
+
+function daysSinceLastActivity(habits, now) {
+  const latest = habits
+    .flatMap(habit => Object.values(habit?.logs ?? {}))
+    .map(log => new Date(log?.loggedAt ?? log?.updatedAt ?? 0).getTime())
+    .filter(Number.isFinite)
+    .sort((a, b) => b - a)[0]
+  if (latest === undefined) return 0
+  return Math.max(0, Math.floor((now.getTime() - latest) / 86_400_000))
+}
+
+/**
+ * Evaluate and, when due, show exactly one local notification.
+ * Exported to make scheduler behavior deterministic in tests.
+ */
+export async function runSchedulerTick(nowValue = new Date()) {
+  if (_tickRunning || !_getHabits) return _lastEvaluation
+  if (!supported() || Notification.permission !== 'granted') return null
+  _tickRunning = true
+  try {
+    const now = nowValue instanceof Date ? nowValue : new Date(nowValue)
+    const habits = _getHabits() ?? []
+    const settings = _getSettings?.() ?? null
+    const context = _getContext?.() ?? {}
+    const timezone = context.timezone ?? currentTimezone()
+    const agenda = schedulerAgenda(habits, now, timezone)
+    const localDate = localDateKey(now, timezone)
+    const evaluation = evaluateNotificationPlan({
+      now,
+      timezone,
+      agenda,
+      settings,
+      history: getNotificationLog(),
+      dayClosure: context.dayClosure ?? null,
+      daysSinceActivity: context.daysSinceActivity ?? daysSinceLastActivity(habits, now),
+      windowMinutes: 1,
+    })
+    if (_cloudDeliveryActive && navigator.onLine !== false) {
+      _lastEvaluation = {
+        ...evaluation,
+        intentions: [],
+        suppression: 'cloud_delivery',
+      }
+      return _lastEvaluation
+    }
+    _lastEvaluation = evaluation
+    const intent = evaluation.intentions[0]
+    if (!intent) return evaluation
+    const actions = actionsForNotification({
+      kind: intent.kind,
+      referenceIds: intent.referenceIds,
+      directActionsEnabled: settings?.notificationDirectActionsEnabled === true,
+    })
+    const habitId = actions.length ? intent.referenceIds[0] : null
+    await showNotification(intent.title, {
+      body: intent.body,
+      tag: habitId ? `habit-${habitId}` : `traker-${intent.kind}`,
+      renotify: false,
+      actions,
+      data: {
+        url: intent.url,
+        habitId,
+        kind: intent.kind,
+        intentKey: intent.intentKey,
+        localDate,
+        phraseId: intent.phraseId,
+        copyVersion: intent.copyVersion,
+        copyHash: intent.copyHash,
+      },
+    })
+    return evaluation
+  } finally {
+    _tickRunning = false
   }
-
-  if (!settings?.inactivityReminderEnabled) return
-  if (settings?.inactivityReminderTime !== hhmm) return
-
-  if (!activeHabits.length) return
-  if (activeHabits.some(_hasLoggedToday)) return
-
-  const inactivityKey = `inactivity-${dateStr}-${hhmm}`
-  if (_firedKeys.has(inactivityKey)) return
-  _firedKeys.add(inactivityKey)
-
-  showNotification('Traker', {
-    body: 'Aun no has registrado nada hoy. Un paso pequeno tambien cuenta.',
-    tag: 'daily-inactivity-reminder',
-    renotify: true,
-    data: { url: '/' },
-  })
 }

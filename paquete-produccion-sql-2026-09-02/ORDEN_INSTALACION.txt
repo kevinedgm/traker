@@ -1,0 +1,33 @@
+TRAKER — ORDEN DE INSTALACION SQL
+=================================
+
+Aplicar mediante Supabase CLI en este orden:
+
+01. 001_initial_schema.sql
+02. 002_entries_phase7_sync.sql
+03. 003_push_notifications.sql
+04. 004_goals_schema_and_consent.sql
+05. 005_goals_sync_rpc.sql
+06. 006_habit_minimum_version.sql
+07. 007_goal_horizons_and_habit_links.sql
+08. 008_refresh_goal_sync_rpc.sql
+09. 009_copy_personality.sql
+10. 20260829053218_integrated_personal_model.sql
+11. 20260829065010_notification_worker_and_day_closures.sql
+12. 20260829065437_notification_worker_service_grants.sql
+13. 20260829070350_notification_worker_hardening.sql
+14. 20260829071615_phase5_sync_v2_backfill.sql
+15. 20260830081517_contract_cleanup_after_cutover.sql
+16. 20260831045854_canonical_sync_v2_quality_report.sql
+17. 20260831051809_sync_ledger_retention.sql
+18. 20260831055708_harden_habit_schedule_payloads.sql
+19. 20260831142345_sync_goal_milestones.sql
+20. 20260901060000_goal_closure_and_checkin_preference.sql
+21. 20260902044303_account_deletion_and_legacy_cleanup.sql
+22. 20260902050206_notification_retention_and_operational_health.sql
+23. 20260902053000_product_analytics_consent_enforcement.sql
+24. 20260902053100_account_deletion_product_events.sql
+
+TOTAL: 24 migraciones.
+
+No ejecutar los archivos de rollbacks/ como parte de la instalacion.
